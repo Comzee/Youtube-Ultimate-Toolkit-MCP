@@ -433,33 +433,86 @@ async function runStdioServer() {
 
 async function runRemoteServer(port: number) {
   const app = express();
-  const AUTH_TOKEN = process.env.MCP_AUTH_TOKEN;
 
-  if (!AUTH_TOKEN) {
-    console.error("Error: MCP_AUTH_TOKEN environment variable is required for remote mode");
+  // OAuth credentials from environment
+  const OAUTH_CLIENT_ID = process.env.OAUTH_CLIENT_ID;
+  const OAUTH_CLIENT_SECRET = process.env.OAUTH_CLIENT_SECRET;
+
+  if (!OAUTH_CLIENT_ID || !OAUTH_CLIENT_SECRET) {
+    console.error("Error: OAUTH_CLIENT_ID and OAUTH_CLIENT_SECRET environment variables are required for remote mode");
     process.exit(1);
+  }
+
+  // Store issued access tokens (in production, use Redis or similar)
+  const validTokens = new Set<string>();
+
+  // Generate a random token
+  function generateToken(): string {
+    const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
+    let token = '';
+    for (let i = 0; i < 64; i++) {
+      token += chars.charAt(Math.floor(Math.random() * chars.length));
+    }
+    return token;
   }
 
   // Store active transports for message routing
   const transports = new Map<string, SSEServerTransport>();
 
-  // Auth middleware
+  // Parse JSON and URL-encoded bodies
+  app.use(express.json());
+  app.use(express.urlencoded({ extended: true }));
+
+  // OAuth token endpoint - no auth required
+  app.post("/oauth/token", (req: Request, res: Response) => {
+    const { client_id, client_secret, grant_type } = req.body;
+
+    // Support both form-encoded and JSON
+    const clientId = client_id || req.body.clientId;
+    const clientSecret = client_secret || req.body.clientSecret;
+
+    if (grant_type && grant_type !== "client_credentials") {
+      res.status(400).json({ error: "unsupported_grant_type" });
+      return;
+    }
+
+    if (clientId !== OAUTH_CLIENT_ID || clientSecret !== OAUTH_CLIENT_SECRET) {
+      res.status(401).json({ error: "invalid_client" });
+      return;
+    }
+
+    const accessToken = generateToken();
+    validTokens.add(accessToken);
+
+    console.log("OAuth token issued");
+
+    res.json({
+      access_token: accessToken,
+      token_type: "Bearer",
+      expires_in: 86400 // 24 hours (tokens don't actually expire in this simple impl)
+    });
+  });
+
+  // Auth middleware - skip for OAuth token endpoint
   const authMiddleware = (req: Request, res: Response, next: NextFunction): void => {
+    // Skip auth for token endpoint
+    if (req.path === "/oauth/token") {
+      next();
+      return;
+    }
+
     const authHeader = req.headers.authorization;
     const token = authHeader?.replace("Bearer ", "");
 
-    if (token !== AUTH_TOKEN) {
+    if (!token || !validTokens.has(token)) {
       res.status(401).json({ error: "Unauthorized" });
       return;
     }
     next();
   };
 
-  // Apply auth to all routes
+  // Apply auth middleware
   app.use(authMiddleware);
-
-  // Parse JSON for POST requests
-  app.use(express.json());
 
   // SSE endpoint - client connects here to receive messages
   app.get("/sse", async (req: Request, res: Response) => {
@@ -500,13 +553,14 @@ async function runRemoteServer(port: number) {
     }
   });
 
-  // Health check endpoint (no auth required would need separate router, so just include with auth)
+  // Health check endpoint
   app.get("/health", (_req: Request, res: Response) => {
-    res.json({ status: "ok", version: "1.1.0" });
+    res.json({ status: "ok", version: "1.2.0" });
   });
 
   app.listen(port, () => {
     console.log(`YouTube MCP server running in remote mode on port ${port}`);
+    console.log(`OAuth token endpoint: http://localhost:${port}/oauth/token`);
     console.log(`SSE endpoint: http://localhost:${port}/sse`);
     console.log(`Messages endpoint: http://localhost:${port}/messages`);
   });
