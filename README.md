@@ -58,7 +58,8 @@ Requires `.env` file with OAuth credentials:
 ```bash
 OAUTH_CLIENT_ID=youtube-mcp-client
 OAUTH_CLIENT_SECRET=your-secret-here  # Generate with: openssl rand -hex 32
-AUTH_PASSWORD=your-password-here      # Required to authorize on consent page
+# Generate password hash with: node -e "require('bcrypt').hash('yourpassword', 12).then(console.log)"
+AUTH_PASSWORD_HASH=$2b$12$...your-bcrypt-hash-here...
 ```
 
 The server exposes:
@@ -107,7 +108,10 @@ Actual tool calls (`tools/call`) require authentication.
 
 ### Security Notes
 
-- **Password-protected consent page** - Only users who know the AUTH_PASSWORD can authorize access
+- **Password-protected consent page** - Only users who know the password can authorize access
+- **Bcrypt password hashing** - Password stored as bcrypt hash, not plaintext
+- **Rate limiting** - Max 5 attempts per IP before 10-minute lockout
+- **IP-based lockout** - Failed attempts tracked per IP with automatic lockout
 - PKCE (S256) is required for all authorization flows
 - Tokens are stored in memory (lost on restart)
 - CORS is configured for Claude Web UI access

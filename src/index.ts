@@ -11,6 +11,7 @@ import crypto from "node:crypto";
 import { spawn } from "node:child_process";
 import { rimraf } from "rimraf";
 import express, { Request, Response, NextFunction } from "express";
+import bcrypt from "bcrypt";
 import { z } from "zod";
 
 // Parse command line arguments
@@ -370,16 +371,62 @@ async function runRemoteServer(port: number) {
   // OAuth credentials from environment
   const OAUTH_CLIENT_ID = process.env.OAUTH_CLIENT_ID;
   const OAUTH_CLIENT_SECRET = process.env.OAUTH_CLIENT_SECRET;
-  const AUTH_PASSWORD = process.env.AUTH_PASSWORD;
+  const AUTH_PASSWORD_HASH = process.env.AUTH_PASSWORD_HASH;
 
   if (!OAUTH_CLIENT_ID || !OAUTH_CLIENT_SECRET) {
     console.error("Error: OAUTH_CLIENT_ID and OAUTH_CLIENT_SECRET environment variables are required for remote mode");
     process.exit(1);
   }
 
-  if (!AUTH_PASSWORD) {
-    console.error("Error: AUTH_PASSWORD environment variable is required for remote mode");
+  if (!AUTH_PASSWORD_HASH) {
+    console.error("Error: AUTH_PASSWORD_HASH environment variable is required for remote mode");
     process.exit(1);
+  }
+
+  // Rate limiting and lockout tracking
+  const MAX_ATTEMPTS = 5;
+  const LOCKOUT_DURATION_MS = 10 * 60 * 1000; // 10 minutes
+  const failedAttempts = new Map<string, { count: number; lockedUntil: number }>();
+
+  function getClientIp(req: Request): string {
+    // Trust X-Forwarded-For from nginx proxy
+    const forwarded = req.headers['x-forwarded-for'];
+    if (forwarded) {
+      const ips = (Array.isArray(forwarded) ? forwarded[0] : forwarded).split(',');
+      return ips[0].trim();
+    }
+    return req.ip || req.socket.remoteAddress || 'unknown';
+  }
+
+  function isLockedOut(ip: string): { locked: boolean; remainingMs: number } {
+    const record = failedAttempts.get(ip);
+    if (!record) return { locked: false, remainingMs: 0 };
+
+    if (record.lockedUntil > Date.now()) {
+      return { locked: true, remainingMs: record.lockedUntil - Date.now() };
+    }
+
+    // Lockout expired, reset
+    if (record.lockedUntil > 0) {
+      failedAttempts.delete(ip);
+    }
+    return { locked: false, remainingMs: 0 };
+  }
+
+  function recordFailedAttempt(ip: string): void {
+    const record = failedAttempts.get(ip) || { count: 0, lockedUntil: 0 };
+    record.count++;
+
+    if (record.count >= MAX_ATTEMPTS) {
+      record.lockedUntil = Date.now() + LOCKOUT_DURATION_MS;
+      console.log(`IP ${ip} locked out for 10 minutes after ${record.count} failed attempts`);
+    }
+
+    failedAttempts.set(ip, record);
+  }
+
+  function clearFailedAttempts(ip: string): void {
+    failedAttempts.delete(ip);
   }
 
   // Store issued access tokens and authorization codes
@@ -501,7 +548,7 @@ async function runRemoteServer(port: number) {
   });
 
   // OAuth Approval endpoint - verifies password, generates code and redirects
-  app.post("/authorize/approve", (req: Request, res: Response) => {
+  app.post("/authorize/approve", async (req: Request, res: Response) => {
     const {
       client_id,
       redirect_uri,
@@ -511,21 +558,42 @@ async function runRemoteServer(port: number) {
       password
     } = req.body;
 
-    console.log("OAuth approval - verifying password");
+    const clientIp = getClientIp(req);
+    console.log(`OAuth approval attempt from IP: ${clientIp}`);
+
+    // Check if IP is locked out
+    const lockStatus = isLockedOut(clientIp);
+    if (lockStatus.locked) {
+      const remainingMins = Math.ceil(lockStatus.remainingMs / 60000);
+      console.log(`OAuth approval - IP ${clientIp} is locked out for ${remainingMins} more minutes`);
+      res.status(429).send(renderErrorPage(`Too many failed attempts. Try again in ${remainingMins} minute${remainingMins > 1 ? 's' : ''}.`));
+      return;
+    }
 
     if (!client_id || !redirect_uri || !code_challenge) {
       res.status(400).send(renderErrorPage("Missing parameters"));
       return;
     }
 
-    // Verify password
-    if (password !== AUTH_PASSWORD) {
-      console.log("OAuth approval - incorrect password");
-      res.status(403).send(renderErrorPage("Incorrect password"));
+    // Verify password using bcrypt (async, timing-safe)
+    const passwordValid = await bcrypt.compare(password || '', AUTH_PASSWORD_HASH);
+    if (!passwordValid) {
+      recordFailedAttempt(clientIp);
+      const record = failedAttempts.get(clientIp);
+      const attemptsLeft = MAX_ATTEMPTS - (record?.count || 0);
+      console.log(`OAuth approval - incorrect password from ${clientIp} (${attemptsLeft} attempts remaining)`);
+
+      if (attemptsLeft <= 0) {
+        res.status(429).send(renderErrorPage("Too many failed attempts. You are locked out for 10 minutes."));
+      } else {
+        res.status(403).send(renderErrorPage(`Incorrect password. ${attemptsLeft} attempt${attemptsLeft > 1 ? 's' : ''} remaining.`));
+      }
       return;
     }
 
-    console.log("OAuth approval - password verified, generating authorization code");
+    // Password correct - clear any failed attempts
+    clearFailedAttempts(clientIp);
+    console.log(`OAuth approval - password verified for ${clientIp}, generating authorization code`);
 
     // Generate authorization code
     const authCode = generateToken(32);
