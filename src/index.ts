@@ -89,6 +89,13 @@ function stripVttContent(vttContent: string): string {
       .replace(/<\d{2}:\d{2}:\d{2}\.\d{3}>/g, "")
       .replace(/<\/?c>/g, "")
       .replace(/<[^>]+>/g, "")
+      .replace(/&nbsp;/g, " ")
+      .replace(/&amp;/g, "&")
+      .replace(/&lt;/g, "<")
+      .replace(/&gt;/g, ">")
+      .replace(/&quot;/g, '"')
+      .replace(/&#39;/g, "'")
+      .replace(/&apos;/g, "'")
       .trim();
 
     if (cleanedLine !== "") {
