@@ -58,6 +58,7 @@ Requires `.env` file with OAuth credentials:
 ```bash
 OAUTH_CLIENT_ID=youtube-mcp-client
 OAUTH_CLIENT_SECRET=your-secret-here  # Generate with: openssl rand -hex 32
+AUTH_PASSWORD=your-password-here      # Required to authorize on consent page
 ```
 
 The server exposes:
@@ -106,9 +107,9 @@ Actual tool calls (`tools/call`) require authentication.
 
 ### Security Notes
 
+- **Password-protected consent page** - Only users who know the AUTH_PASSWORD can authorize access
 - PKCE (S256) is required for all authorization flows
 - Tokens are stored in memory (lost on restart)
-- Consent page provides user control over authorization
 - CORS is configured for Claude Web UI access
 
 ## Claude Web UI Setup

@@ -370,9 +370,15 @@ async function runRemoteServer(port: number) {
   // OAuth credentials from environment
   const OAUTH_CLIENT_ID = process.env.OAUTH_CLIENT_ID;
   const OAUTH_CLIENT_SECRET = process.env.OAUTH_CLIENT_SECRET;
+  const AUTH_PASSWORD = process.env.AUTH_PASSWORD;
 
   if (!OAUTH_CLIENT_ID || !OAUTH_CLIENT_SECRET) {
     console.error("Error: OAUTH_CLIENT_ID and OAUTH_CLIENT_SECRET environment variables are required for remote mode");
+    process.exit(1);
+  }
+
+  if (!AUTH_PASSWORD) {
+    console.error("Error: AUTH_PASSWORD environment variable is required for remote mode");
     process.exit(1);
   }
 
@@ -494,22 +500,32 @@ async function runRemoteServer(port: number) {
     res.status(200).send(renderConsentPage(approveUrl.toString()));
   });
 
-  // OAuth Approval endpoint - generates code and redirects
-  app.get("/authorize/approve", (req: Request, res: Response) => {
+  // OAuth Approval endpoint - verifies password, generates code and redirects
+  app.post("/authorize/approve", (req: Request, res: Response) => {
     const {
       client_id,
       redirect_uri,
       code_challenge,
       code_challenge_method,
-      state
-    } = req.query;
+      state,
+      password
+    } = req.body;
 
-    console.log("OAuth approval - generating authorization code");
+    console.log("OAuth approval - verifying password");
 
     if (!client_id || !redirect_uri || !code_challenge) {
       res.status(400).send(renderErrorPage("Missing parameters"));
       return;
     }
+
+    // Verify password
+    if (password !== AUTH_PASSWORD) {
+      console.log("OAuth approval - incorrect password");
+      res.status(403).send(renderErrorPage("Incorrect password"));
+      return;
+    }
+
+    console.log("OAuth approval - password verified, generating authorization code");
 
     // Generate authorization code
     const authCode = generateToken(32);
@@ -535,8 +551,12 @@ async function runRemoteServer(port: number) {
     res.redirect(redirectUrl.toString());
   });
 
-  // Helper to render consent page HTML
+  // Helper to render consent page HTML with password form
   function renderConsentPage(approveUrl: string): string {
+    // Parse the URL to extract query parameters for hidden form fields
+    const url = new URL(approveUrl);
+    const params = url.searchParams;
+
     return `<!DOCTYPE html>
 <html>
 <head>
@@ -551,11 +571,16 @@ async function runRemoteServer(port: number) {
     h1 { margin-top: 0; color: #fff; }
     p { color: #aaa; line-height: 1.6; }
     .btn { display: inline-block; background: #e94560; color: white; padding: 12px 32px;
-           border-radius: 6px; text-decoration: none; font-weight: 600; margin-top: 1rem;
-           transition: background 0.2s; }
+           border-radius: 6px; border: none; font-weight: 600; margin-top: 1rem;
+           transition: background 0.2s; cursor: pointer; font-size: 1rem; }
     .btn:hover { background: #ff6b6b; }
     .scope { background: #0f3460; padding: 0.5rem 1rem; border-radius: 4px;
              display: inline-block; margin: 0.5rem 0.25rem; font-size: 0.9rem; }
+    .password-field { width: 100%; padding: 12px; border-radius: 6px; border: 1px solid #0f3460;
+                      background: #0f3460; color: #fff; font-size: 1rem; margin-top: 1rem;
+                      box-sizing: border-box; }
+    .password-field::placeholder { color: #666; }
+    .password-field:focus { outline: none; border-color: #e94560; }
   </style>
 </head>
 <body>
@@ -566,8 +591,16 @@ async function runRemoteServer(port: number) {
       <span class="scope">get_video</span>
       <span class="scope">get_playlist</span>
     </div>
-    <p>Click Authorize to allow access.</p>
-    <a href="${approveUrl}" class="btn">Authorize</a>
+    <p>Enter password to authorize:</p>
+    <form method="POST" action="${url.pathname}">
+      <input type="hidden" name="client_id" value="${params.get('client_id') || ''}">
+      <input type="hidden" name="redirect_uri" value="${params.get('redirect_uri') || ''}">
+      <input type="hidden" name="code_challenge" value="${params.get('code_challenge') || ''}">
+      <input type="hidden" name="code_challenge_method" value="${params.get('code_challenge_method') || 'S256'}">
+      <input type="hidden" name="state" value="${params.get('state') || ''}">
+      <input type="password" name="password" class="password-field" placeholder="Password" required autofocus>
+      <button type="submit" class="btn">Authorize</button>
+    </form>
   </div>
 </body>
 </html>`;
