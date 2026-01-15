@@ -340,6 +340,22 @@ async function runStdioServer() {
 async function runRemoteServer(port: number) {
   const app = express();
   app.use(express.json());
+  app.use(express.urlencoded({ extended: true }));  // Required for OAuth token requests
+
+  // CORS middleware - must be before other routes
+  app.use((req: Request, res: Response, next: NextFunction) => {
+    res.setHeader('Access-Control-Allow-Origin', '*');
+    res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
+    res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization, MCP-Protocol-Version, mcp-session-id');
+    res.setHeader('Access-Control-Expose-Headers', 'WWW-Authenticate, MCP-Session-Id');
+
+    // Handle preflight requests
+    if (req.method === 'OPTIONS') {
+      res.status(200).end();
+      return;
+    }
+    next();
+  });
 
   // Trust proxy for correct protocol detection behind nginx
   app.set('trust proxy', true);
@@ -413,18 +429,21 @@ async function runRemoteServer(port: number) {
   // Dynamic Client Registration endpoint (RFC 7591)
   app.post("/register", (req: Request, res: Response) => {
     console.log("Dynamic client registration request");
+    const body = req.body || {};
 
     res.status(201).json({
       client_id: OAUTH_CLIENT_ID,
       client_secret: OAUTH_CLIENT_SECRET,
       client_id_issued_at: Math.floor(Date.now() / 1000),
-      grant_types: ["authorization_code"],
+      redirect_uris: body.redirect_uris || ["https://claude.ai/api/mcp/auth_callback"],
+      grant_types: ["authorization_code", "refresh_token"],
       response_types: ["code"],
-      token_endpoint_auth_method: "client_secret_post"
+      token_endpoint_auth_method: "client_secret_post",
+      scope: "mcp"
     });
   });
 
-  // OAuth Authorization endpoint - initiates the auth flow
+  // OAuth Authorization endpoint - shows consent page
   app.get("/authorize", (req: Request, res: Response) => {
     const {
       response_type,
@@ -436,20 +455,52 @@ async function runRemoteServer(port: number) {
     } = req.query;
 
     console.log("OAuth authorize request received");
+    console.log("  client_id:", client_id);
+    console.log("  redirect_uri:", redirect_uri);
 
     // Validate required parameters
     if (response_type !== 'code') {
-      res.status(400).json({ error: "unsupported_response_type" });
+      res.status(400).send(renderErrorPage("Unsupported response type"));
       return;
     }
 
     if (client_id !== OAUTH_CLIENT_ID) {
-      res.status(400).json({ error: "invalid_client" });
+      res.status(400).send(renderErrorPage("Invalid client"));
       return;
     }
 
     if (!redirect_uri || !code_challenge) {
-      res.status(400).json({ error: "invalid_request", error_description: "Missing required parameters" });
+      res.status(400).send(renderErrorPage("Missing required parameters"));
+      return;
+    }
+
+    // Build approval URL with all parameters
+    const baseUrl = getBaseUrl(req);
+    const approveUrl = new URL(`${baseUrl}/authorize/approve`);
+    approveUrl.searchParams.set('client_id', client_id as string);
+    approveUrl.searchParams.set('redirect_uri', redirect_uri as string);
+    approveUrl.searchParams.set('code_challenge', code_challenge as string);
+    approveUrl.searchParams.set('code_challenge_method', (code_challenge_method as string) || 'S256');
+    if (state) approveUrl.searchParams.set('state', state as string);
+
+    // Show consent page
+    res.status(200).send(renderConsentPage(approveUrl.toString()));
+  });
+
+  // OAuth Approval endpoint - generates code and redirects
+  app.get("/authorize/approve", (req: Request, res: Response) => {
+    const {
+      client_id,
+      redirect_uri,
+      code_challenge,
+      code_challenge_method,
+      state
+    } = req.query;
+
+    console.log("OAuth approval - generating authorization code");
+
+    if (!client_id || !redirect_uri || !code_challenge) {
+      res.status(400).send(renderErrorPage("Missing parameters"));
       return;
     }
 
@@ -459,13 +510,13 @@ async function runRemoteServer(port: number) {
     // Store the code with its challenge for later verification
     authCodes.set(authCode, {
       codeChallenge: code_challenge as string,
-      codeChallengeMethod: (code_challenge_method as string) || 'plain',
+      codeChallengeMethod: (code_challenge_method as string) || 'S256',
       clientId: client_id as string,
       redirectUri: redirect_uri as string,
       expiresAt: Date.now() + 600000 // 10 minutes
     });
 
-    console.log("Authorization code issued, redirecting...");
+    console.log("Authorization code issued, redirecting to:", redirect_uri);
 
     // Redirect back to Claude with the authorization code
     const redirectUrl = new URL(redirect_uri as string);
@@ -477,11 +528,88 @@ async function runRemoteServer(port: number) {
     res.redirect(redirectUrl.toString());
   });
 
+  // Helper to render consent page HTML
+  function renderConsentPage(approveUrl: string): string {
+    return `<!DOCTYPE html>
+<html>
+<head>
+  <title>Authorize YouTube MCP</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <style>
+    body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+           display: flex; justify-content: center; align-items: center; min-height: 100vh;
+           margin: 0; background: #1a1a2e; color: #eee; }
+    .container { background: #16213e; padding: 2rem; border-radius: 12px;
+                 max-width: 400px; text-align: center; box-shadow: 0 4px 20px rgba(0,0,0,0.3); }
+    h1 { margin-top: 0; color: #fff; }
+    p { color: #aaa; line-height: 1.6; }
+    .btn { display: inline-block; background: #e94560; color: white; padding: 12px 32px;
+           border-radius: 6px; text-decoration: none; font-weight: 600; margin-top: 1rem;
+           transition: background 0.2s; }
+    .btn:hover { background: #ff6b6b; }
+    .scope { background: #0f3460; padding: 0.5rem 1rem; border-radius: 4px;
+             display: inline-block; margin: 0.5rem 0.25rem; font-size: 0.9rem; }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <h1>YouTube MCP Server</h1>
+    <p>Claude wants to access your YouTube MCP tools:</p>
+    <div>
+      <span class="scope">get_video</span>
+      <span class="scope">get_playlist</span>
+    </div>
+    <p>Click Authorize to allow access.</p>
+    <a href="${approveUrl}" class="btn">Authorize</a>
+  </div>
+</body>
+</html>`;
+  }
+
+  // Helper to render error page HTML
+  function renderErrorPage(message: string): string {
+    return `<!DOCTYPE html>
+<html>
+<head>
+  <title>Authorization Error</title>
+  <style>
+    body { font-family: sans-serif; display: flex; justify-content: center;
+           align-items: center; min-height: 100vh; margin: 0; background: #1a1a2e; color: #eee; }
+    .container { background: #16213e; padding: 2rem; border-radius: 12px; text-align: center; }
+    h1 { color: #e94560; }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <h1>Error</h1>
+    <p>${message}</p>
+  </div>
+</body>
+</html>`;
+  }
+
+  // Helper to get client credentials from request (supports both Basic auth and POST body)
+  function getClientCredentials(req: Request): { clientId: string | undefined, clientSecret: string | undefined } {
+    const authHeader = req.headers.authorization;
+    if (authHeader?.startsWith('Basic ')) {
+      const base64 = authHeader.slice(6);
+      const decoded = Buffer.from(base64, 'base64').toString('utf8');
+      const [clientId, clientSecret] = decoded.split(':');
+      return { clientId, clientSecret };
+    }
+    return {
+      clientId: req.body?.client_id,
+      clientSecret: req.body?.client_secret
+    };
+  }
+
   // OAuth Token endpoint - handles both authorization_code and refresh_token grants
   app.post("/token", (req: Request, res: Response) => {
-    const { grant_type, code, client_id, client_secret, code_verifier, refresh_token } = req.body;
+    const { grant_type, code, code_verifier, refresh_token } = req.body;
+    const { clientId: client_id, clientSecret: client_secret } = getClientCredentials(req);
 
     console.log("OAuth token request received, grant_type:", grant_type);
+    console.log("  client_id:", client_id);
 
     // Handle refresh token grant
     if (grant_type === "refresh_token") {
@@ -572,18 +700,37 @@ async function runRemoteServer(port: number) {
     const authHeader = req.headers.authorization;
     const token = authHeader?.replace("Bearer ", "");
 
-    if (!token || !validTokens.has(token)) {
-      // TEMPORARY: Skip auth to test if MCP works
-      console.log("Auth bypassed for testing - request to:", req.path);
+    // Allow handshake methods without auth - auth happens on actual tool calls
+    const method = req.body?.method;
+    const allowedMethods = ["initialize", "ping", "notifications/initialized", "tools/list", "prompts/list", "resources/list"];
+    if (allowedMethods.includes(method)) {
+      console.log("Allowing unauthenticated:", method);
       next();
       return;
+    }
 
-      // Uncomment below to enable auth:
-      // console.log("Unauthorized request to:", req.path);
-      // const baseUrl = getBaseUrl(req);
-      // res.setHeader('WWW-Authenticate', `Bearer realm="${baseUrl}", error="invalid_token"`);
-      // res.status(401).json({ error: "unauthorized" });
-      // return;
+    // Also allow GET requests (SSE setup)
+    if (req.method === "GET") {
+      console.log("Allowing unauthenticated GET");
+      next();
+      return;
+    }
+
+    if (!token || !validTokens.has(token)) {
+      console.log("Unauthorized request:", req.method, req.path);
+      console.log("  Headers:", JSON.stringify({
+        authorization: authHeader ? "Bearer ..." : undefined,
+        origin: req.headers.origin,
+        "content-type": req.headers["content-type"]
+      }));
+      if (req.body && Object.keys(req.body).length > 0) {
+        console.log("  Body:", JSON.stringify(req.body).slice(0, 200));
+      }
+      const baseUrl = getBaseUrl(req);
+      // Include resource_metadata per MCP spec so client knows where to find OAuth info
+      res.setHeader('WWW-Authenticate', `Bearer resource_metadata="${baseUrl}/.well-known/oauth-protected-resource"`);
+      res.status(401).json({ error: "unauthorized" });
+      return;
     }
     next();
   };

@@ -6,6 +6,7 @@ A Model Context Protocol (MCP) server that fetches YouTube video metadata and tr
 
 - **get_video**: Fetches video metadata (title, channel, duration, views, upload date) and English transcript
 - **get_playlist**: Lists all videos in a YouTube playlist with titles, durations, and URLs
+- **OAuth 2.1 Authentication**: Secure access with PKCE, consent page, and token management
 
 ## Requirements
 
@@ -53,14 +54,76 @@ Add to Claude Desktop config (`~/.config/claude/claude_desktop_config.json`):
 node dist/index.js --remote --port 3010
 ```
 
-Requires `.env` file with OAuth credentials (see `.env.example`).
+Requires `.env` file with OAuth credentials:
+```bash
+OAUTH_CLIENT_ID=youtube-mcp-client
+OAUTH_CLIENT_SECRET=your-secret-here  # Generate with: openssl rand -hex 32
+```
 
 The server exposes:
 - `POST /mcp` - Main MCP endpoint (Streamable HTTP transport, spec 2025-03-26)
 - `GET /mcp` - SSE stream for async responses
 - `DELETE /mcp` - Session termination
 - `GET /health` - Health check
-- OAuth endpoints: `/.well-known/oauth-authorization-server`, `/authorize`, `/token`, `/register`
+- OAuth endpoints (see below)
+
+## OAuth Implementation
+
+The server implements OAuth 2.1 with PKCE for Claude Web UI authentication.
+
+### OAuth Endpoints
+
+| Endpoint | Purpose |
+|----------|---------|
+| `/.well-known/oauth-authorization-server` | OAuth server metadata discovery |
+| `/.well-known/oauth-protected-resource` | Protected resource metadata |
+| `/register` | Dynamic Client Registration (RFC 7591) |
+| `/authorize` | Authorization endpoint - shows consent page |
+| `/authorize/approve` | Handles user approval, generates auth code |
+| `/token` | Token exchange and refresh |
+
+### How It Works
+
+1. **Connection**: Claude connects to `/mcp` - handshake methods (`initialize`, `tools/list`) are allowed without auth
+2. **Tool Call**: When you use a tool, Claude gets 401 with `WWW-Authenticate` header
+3. **OAuth Discovery**: Claude discovers OAuth endpoints via protected resource metadata
+4. **Dynamic Registration**: Claude registers and gets client credentials
+5. **Authorization**: Browser opens consent page - user clicks "Authorize"
+6. **Token Exchange**: Claude exchanges auth code for access token (with PKCE verification)
+7. **Authenticated Request**: Claude retries tool call with Bearer token
+
+### Auth-Free Methods
+
+These MCP methods work without authentication (for discovery/handshake):
+- `initialize`
+- `notifications/initialized`
+- `tools/list`
+- `prompts/list`
+- `resources/list`
+- `ping`
+
+Actual tool calls (`tools/call`) require authentication.
+
+### Security Notes
+
+- PKCE (S256) is required for all authorization flows
+- Tokens are stored in memory (lost on restart)
+- Consent page provides user control over authorization
+- CORS is configured for Claude Web UI access
+
+## Claude Web UI Setup
+
+1. Go to Settings → Connectors → Add Custom Connector
+2. Enter URL: `https://youtubetools.samjesberg.com/mcp`
+3. (Optional) Enter client ID/secret in Advanced Settings, or let Dynamic Client Registration handle it
+4. Start a new chat and enable the MCP
+5. Use a YouTube URL - authorization popup will appear on first tool use
+6. Click "Authorize" on the consent page
+
+Recommended project description:
+```
+When I paste a YouTube URL, automatically use the get_video tool to fetch its transcript, then give me a summary and key takeaways.
+```
 
 ## Systemd Service
 
@@ -107,14 +170,6 @@ server {
 }
 ```
 
-## Claude Web UI Setup
-
-1. Add MCP connection with URL: `https://youtubetools.samjesberg.com/mcp`
-2. Recommended project description:
-   ```
-   When I paste a YouTube URL, automatically use the get_video tool to fetch its transcript, then give me a summary and key takeaways.
-   ```
-
 ## Tools
 
 ### get_video
@@ -158,20 +213,30 @@ Disconnect and reconnect the MCP in Claude settings to refresh the tool list.
 ### MCP won't connect from Claude Web UI
 - Ensure DNS is grey-clouded (passthrough) on Cloudflare, not orange-clouded (proxied)
 - Check service is running: `sudo systemctl status youtube-mcp`
+- Check logs: `sudo journalctl -u youtube-mcp -f`
+
+### OAuth flow not starting
+- Verify CORS headers are present (check browser console)
+- Ensure `/.well-known/` endpoints return 200 (not 401)
+- Check that `/register` returns valid client credentials
+
+### Authorization window doesn't appear
+- OAuth flow triggers on first tool USE, not on connection
+- Start a chat, enable MCP, then ask Claude to fetch a YouTube video
 
 ## Architecture
 
-- **Transport**: Streamable HTTP (MCP spec 2025-03-26) - replaced deprecated SSE transport
+- **Transport**: Streamable HTTP (MCP spec 2025-03-26)
 - **Session Management**: Stateful sessions with UUID identifiers stored in memory
-- **OAuth**: Authorization Code flow with PKCE (currently bypassed for testing)
+- **OAuth**: Authorization Code flow with PKCE, Dynamic Client Registration
+- **Token Storage**: In-memory (tokens lost on service restart)
 
 ## Files
 
-- `src/index.ts` - Main server code
+- `src/index.ts` - Main server code with OAuth implementation
 - `youtube-mcp.service` - Systemd service file
 - `.env` - OAuth credentials (not committed)
 - `.env.example` - Example environment file
-- `NEXT_SESSION_OAUTH.md` - Context for implementing OAuth in next session
 
 ## License
 
