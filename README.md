@@ -1,12 +1,11 @@
 # YouTube MCP
 
-Enhanced Model Context Protocol (MCP) server for YouTube integration with Claude. Provides transcripts, video metadata, playlist information, and multi-language support.
+Enhanced Model Context Protocol (MCP) server for YouTube integration with Claude. Provides transcripts with metadata, playlist information, and multi-language support.
 
 ## Features
 
-- **Transcripts**: Download and clean subtitles/captions from any YouTube video
+- **Combined Output**: Get video metadata + transcript in a single call
 - **Multi-language**: Support for 20+ languages with fallback to auto-generated captions
-- **Video Metadata**: Get title, channel, duration, views, description, tags
 - **Playlist Support**: List all videos in a playlist with durations and URLs
 - **Language Detection**: Check available subtitle languages before requesting
 
@@ -51,41 +50,32 @@ Add to your `claude_desktop_config.json`:
 }
 ```
 
-Or if published to npm:
-```json
-{
-  "mcpServers": {
-    "youtube": {
-      "command": "npx",
-      "args": ["-y", "youtube-mcp"]
-    }
-  }
-}
-```
-
 ## Tools
 
-### get_transcript
+### get_video
 
-Download cleaned transcript from a YouTube video.
+Get a YouTube video's metadata and transcript in one call. Fetches metadata and subtitles in parallel for speed.
 
 **Parameters:**
 - `url` (required): YouTube video URL
 - `language` (optional): Language code (default: "en")
 
+**Returns:**
+```
+Title: Video Title Here
+Channel: Channel Name
+Duration: 12:34 | Views: 1,234,567 | Uploaded: 2024-01-15
+
+---
+Transcript:
+
+The cleaned transcript text appears here...
+```
+
 **Example:**
 ```
-Get the transcript of https://youtube.com/watch?v=...
+Summarize this video: https://youtube.com/watch?v=...
 ```
-
-### get_video_metadata
-
-Get video information without downloading.
-
-**Parameters:**
-- `url` (required): YouTube video URL
-
-**Returns:** Title, channel, duration, view count, upload date, description, tags
 
 ### get_playlist
 
@@ -119,12 +109,13 @@ npm run dev
 
 ## How It Works
 
-1. Uses yt-dlp to fetch subtitle files in VTT format
+1. Uses yt-dlp to fetch metadata and subtitle files in parallel
 2. Parses and cleans VTT content:
    - Removes timestamps and positioning metadata
    - Strips HTML-like tags
    - Deduplicates consecutive lines (VTT repeats for karaoke display)
-3. Returns clean, readable text optimized for LLM context windows
+3. Combines compact metadata header with clean transcript
+4. Returns optimized output for LLM context windows
 
 ## License
 

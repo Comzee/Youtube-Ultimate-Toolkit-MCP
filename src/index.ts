@@ -16,7 +16,7 @@ import { rimraf } from "rimraf";
 const server = new Server(
   {
     name: "youtube-mcp",
-    version: "1.0.0",
+    version: "1.1.0",
   },
   {
     capabilities: {
@@ -69,18 +69,14 @@ function stripVttContent(vttContent: string): string {
   const textLines: string[] = [];
 
   for (const line of contentLines) {
-    // Skip timestamp lines
     if (line.includes("-->")) continue;
-    // Skip positioning metadata
     if (line.includes("align:") || line.includes("position:")) continue;
-    // Skip empty lines
     if (line.trim() === "") continue;
 
-    // Remove inline timestamps and tags
     const cleanedLine = line
       .replace(/<\d{2}:\d{2}:\d{2}\.\d{3}>/g, "")
       .replace(/<\/?c>/g, "")
-      .replace(/<[^>]+>/g, "") // Remove any other HTML-like tags
+      .replace(/<[^>]+>/g, "")
       .trim();
 
     if (cleanedLine !== "") {
@@ -99,23 +95,8 @@ function stripVttContent(vttContent: string): string {
   return uniqueLines.join("\n");
 }
 
-// Parse yt-dlp JSON output for metadata
-interface VideoMetadata {
-  title: string;
-  channel: string;
-  channelId: string;
-  duration: number;
-  durationFormatted: string;
-  viewCount: number;
-  uploadDate: string;
-  description: string;
-  tags: string[];
-  categories: string[];
-  thumbnailUrl: string;
-  url: string;
-}
-
-function parseMetadata(json: string): VideoMetadata {
+// Parse and format compact metadata header
+function formatCompactMetadata(json: string): string {
   const data = JSON.parse(json);
 
   const duration = data.duration || 0;
@@ -126,58 +107,30 @@ function parseMetadata(json: string): VideoMetadata {
     ? `${hours}:${minutes.toString().padStart(2, "0")}:${seconds.toString().padStart(2, "0")}`
     : `${minutes}:${seconds.toString().padStart(2, "0")}`;
 
-  return {
-    title: data.title || "Unknown",
-    channel: data.channel || data.uploader || "Unknown",
-    channelId: data.channel_id || "",
-    duration,
-    durationFormatted,
-    viewCount: data.view_count || 0,
-    uploadDate: data.upload_date || "",
-    description: data.description || "",
-    tags: data.tags || [],
-    categories: data.categories || [],
-    thumbnailUrl: data.thumbnail || "",
-    url: data.webpage_url || data.url || "",
-  };
-}
+  const viewCount = (data.view_count || 0).toLocaleString();
+  const uploadDate = data.upload_date || "Unknown";
+  // Format date from YYYYMMDD to YYYY-MM-DD
+  const formattedDate = uploadDate.length === 8
+    ? `${uploadDate.slice(0, 4)}-${uploadDate.slice(4, 6)}-${uploadDate.slice(6, 8)}`
+    : uploadDate;
 
-// Format metadata for display
-function formatMetadata(meta: VideoMetadata): string {
-  const lines = [
-    `Title: ${meta.title}`,
-    `Channel: ${meta.channel}`,
-    `Duration: ${meta.durationFormatted}`,
-    `Views: ${meta.viewCount.toLocaleString()}`,
-    `Upload Date: ${meta.uploadDate}`,
-    `URL: ${meta.url}`,
-    "",
-    "Description:",
-    meta.description,
-  ];
-
-  if (meta.tags.length > 0) {
-    lines.push("", `Tags: ${meta.tags.join(", ")}`);
-  }
-
-  return lines.join("\n");
+  return [
+    `Title: ${data.title || "Unknown"}`,
+    `Channel: ${data.channel || data.uploader || "Unknown"}`,
+    `Duration: ${durationFormatted} | Views: ${viewCount} | Uploaded: ${formattedDate}`,
+  ].join("\n");
 }
 
 // Parse playlist info
-interface PlaylistInfo {
+interface PlaylistVideo {
+  index: number;
   title: string;
-  channel: string;
-  videoCount: number;
-  videos: Array<{
-    index: number;
-    title: string;
-    url: string;
-    duration: string;
-  }>;
+  url: string;
+  duration: string;
 }
 
-function parsePlaylist(jsonLines: string): PlaylistInfo {
-  const videos: PlaylistInfo["videos"] = [];
+function parsePlaylist(jsonLines: string): { title: string; channel: string; videos: PlaylistVideo[] } {
+  const videos: PlaylistVideo[] = [];
   let playlistTitle = "";
   let playlistChannel = "";
 
@@ -213,18 +166,16 @@ function parsePlaylist(jsonLines: string): PlaylistInfo {
   return {
     title: playlistTitle || "Unknown Playlist",
     channel: playlistChannel || "Unknown",
-    videoCount: videos.length,
     videos,
   };
 }
 
-function formatPlaylist(playlist: PlaylistInfo): string {
+function formatPlaylist(playlist: { title: string; channel: string; videos: PlaylistVideo[] }): string {
   const lines = [
     `Playlist: ${playlist.title}`,
     `Channel: ${playlist.channel}`,
-    `Videos: ${playlist.videoCount}`,
+    `Videos: ${playlist.videos.length}`,
     "",
-    "Contents:",
   ];
 
   for (const video of playlist.videos) {
@@ -235,22 +186,16 @@ function formatPlaylist(playlist: PlaylistInfo): string {
   return lines.join("\n");
 }
 
-// Available languages for subtitles
-const COMMON_LANGUAGES = [
-  "en", "es", "fr", "de", "it", "pt", "ru", "ja", "ko", "zh",
-  "ar", "hi", "nl", "pl", "tr", "vi", "th", "id", "sv", "da"
-];
-
 // Define tools
 server.setRequestHandler(ListToolsRequestSchema, async () => {
   return {
     tools: [
       {
-        name: "get_transcript",
+        name: "get_video",
         description:
-          "Download and return cleaned transcript/subtitles from a YouTube video. " +
-          "Supports multiple languages and falls back to auto-generated captions. " +
-          "Use this tool to read YouTube video content for summarization or analysis.",
+          "Get a YouTube video's metadata and transcript in one call. " +
+          "Returns title, channel, duration, views, upload date, followed by the full transcript. " +
+          "Supports multiple languages. Use this for summarization or analysis of YouTube content.",
         inputSchema: {
           type: "object",
           properties: {
@@ -262,22 +207,6 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
               type: "string",
               description: "Subtitle language code (e.g., 'en', 'es', 'fr', 'de', 'ja'). Defaults to 'en'",
               default: "en"
-            },
-          },
-          required: ["url"],
-        },
-      },
-      {
-        name: "get_video_metadata",
-        description:
-          "Get metadata about a YouTube video including title, channel, duration, " +
-          "view count, upload date, description, and tags. Does not download the video.",
-        inputSchema: {
-          type: "object",
-          properties: {
-            url: {
-              type: "string",
-              description: "YouTube video URL"
             },
           },
           required: ["url"],
@@ -332,25 +261,32 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 
   try {
     switch (name) {
-      case "get_transcript": {
+      case "get_video": {
         const url = args.url as string;
         const language = (args.language as string) || "en";
 
+        // Fetch metadata and subtitles in parallel
         const tempDir = fs.mkdtempSync(`${os.tmpdir()}${path.sep}youtube-`);
 
         try {
-          // Try manual subtitles first, then auto-generated
-          await runYtDlp([
-            "--write-sub",
-            "--write-auto-sub",
-            "--sub-lang", language,
-            "--skip-download",
-            "--sub-format", "vtt",
-            "-o", "%(id)s.%(ext)s",
-            url
-          ], tempDir);
+          const [metadataJson] = await Promise.all([
+            runYtDlp(["--dump-json", "--no-download", url]),
+            runYtDlp([
+              "--write-sub",
+              "--write-auto-sub",
+              "--sub-lang", language,
+              "--skip-download",
+              "--sub-format", "vtt",
+              "-o", "%(id)s.%(ext)s",
+              url
+            ], tempDir)
+          ]);
 
-          let content = "";
+          // Format metadata header
+          const metadataHeader = formatCompactMetadata(metadataJson);
+
+          // Get transcript
+          let transcript = "";
           const files = fs.readdirSync(tempDir);
 
           for (const file of files) {
@@ -358,43 +294,30 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
               const fileContent = fs.readFileSync(path.join(tempDir, file), "utf8");
               const cleanedContent = stripVttContent(fileContent);
               if (cleanedContent) {
-                content = cleanedContent;
-                break; // Use first valid subtitle file
+                transcript = cleanedContent;
+                break;
               }
             }
           }
 
-          if (!content) {
+          if (!transcript) {
             return {
               content: [{
                 type: "text",
-                text: `No subtitles found for language '${language}'. Try 'get_available_languages' to see what's available.`
+                text: `${metadataHeader}\n\n---\n\nNo subtitles found for language '${language}'. Try 'get_available_languages' to see what's available.`
               }],
-              isError: true,
             };
           }
 
           return {
-            content: [{ type: "text", text: content }],
+            content: [{
+              type: "text",
+              text: `${metadataHeader}\n\n---\nTranscript:\n\n${transcript}`
+            }],
           };
         } finally {
           rimraf.sync(tempDir);
         }
-      }
-
-      case "get_video_metadata": {
-        const url = args.url as string;
-
-        const output = await runYtDlp([
-          "--dump-json",
-          "--no-download",
-          url
-        ]);
-
-        const metadata = parseMetadata(output);
-        return {
-          content: [{ type: "text", text: formatMetadata(metadata) }],
-        };
       }
 
       case "get_playlist": {
@@ -423,7 +346,6 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           url
         ]);
 
-        // Parse the output to extract available languages
         const lines = output.split("\n");
         const manualSubs: string[] = [];
         const autoSubs: string[] = [];
@@ -442,7 +364,6 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
             continue;
           }
 
-          // Language lines typically start with a language code
           const match = line.match(/^([a-z]{2}(-[a-zA-Z]+)?)\s+/);
           if (match) {
             const lang = match[1];
@@ -454,17 +375,15 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         let result = "Available Subtitles:\n\n";
 
         if (manualSubs.length > 0) {
-          result += "Manual subtitles:\n";
-          result += manualSubs.join(", ") + "\n\n";
+          result += "Manual: " + manualSubs.join(", ") + "\n\n";
         } else {
-          result += "No manual subtitles available.\n\n";
+          result += "No manual subtitles.\n\n";
         }
 
         if (autoSubs.length > 0) {
-          result += "Auto-generated captions:\n";
-          result += autoSubs.join(", ");
+          result += "Auto-generated: " + autoSubs.join(", ");
         } else {
-          result += "No auto-generated captions available.";
+          result += "No auto-generated captions.";
         }
 
         return {
