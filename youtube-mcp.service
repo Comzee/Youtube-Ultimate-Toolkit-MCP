@@ -1,0 +1,16 @@
+[Unit]
+Description=YouTube MCP Server (Remote Mode)
+After=network.target
+
+[Service]
+Type=simple
+User=comzee
+WorkingDirectory=/home/comzee/Apps/YoutubeMCP
+ExecStart=/usr/bin/node /home/comzee/Apps/YoutubeMCP/dist/index.js --remote --port 3010
+Restart=on-failure
+RestartSec=10
+Environment=NODE_ENV=production
+EnvironmentFile=/home/comzee/Apps/YoutubeMCP/.env
+
+[Install]
+WantedBy=multi-user.target

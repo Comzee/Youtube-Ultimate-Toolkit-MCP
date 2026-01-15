@@ -2,6 +2,7 @@
 
 import { Server } from "@modelcontextprotocol/sdk/server/index.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
+import { SSEServerTransport } from "@modelcontextprotocol/sdk/server/sse.js";
 import {
   CallToolRequestSchema,
   ListToolsRequestSchema,
@@ -12,6 +13,25 @@ import fs from "node:fs";
 import path from "node:path";
 import { spawn } from "node:child_process";
 import { rimraf } from "rimraf";
+import express, { Request, Response, NextFunction } from "express";
+
+// Parse command line arguments
+function parseArgs(): { remote: boolean; port: number } {
+  const args = process.argv.slice(2);
+  let remote = false;
+  let port = 3000;
+
+  for (let i = 0; i < args.length; i++) {
+    if (args[i] === "--remote") {
+      remote = true;
+    } else if (args[i] === "--port" && args[i + 1]) {
+      port = parseInt(args[i + 1], 10);
+      i++;
+    }
+  }
+
+  return { remote, port };
+}
 
 const server = new Server(
   {
@@ -406,9 +426,100 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
   }
 });
 
-async function runServer() {
+async function runStdioServer() {
   const transport = new StdioServerTransport();
   await server.connect(transport);
 }
 
-runServer().catch(console.error);
+async function runRemoteServer(port: number) {
+  const app = express();
+  const AUTH_TOKEN = process.env.MCP_AUTH_TOKEN;
+
+  if (!AUTH_TOKEN) {
+    console.error("Error: MCP_AUTH_TOKEN environment variable is required for remote mode");
+    process.exit(1);
+  }
+
+  // Store active transports for message routing
+  const transports = new Map<string, SSEServerTransport>();
+
+  // Auth middleware
+  const authMiddleware = (req: Request, res: Response, next: NextFunction): void => {
+    const authHeader = req.headers.authorization;
+    const token = authHeader?.replace("Bearer ", "");
+
+    if (token !== AUTH_TOKEN) {
+      res.status(401).json({ error: "Unauthorized" });
+      return;
+    }
+    next();
+  };
+
+  // Apply auth to all routes
+  app.use(authMiddleware);
+
+  // Parse JSON for POST requests
+  app.use(express.json());
+
+  // SSE endpoint - client connects here to receive messages
+  app.get("/sse", async (req: Request, res: Response) => {
+    console.log("SSE connection established");
+
+    const transport = new SSEServerTransport("/messages", res);
+    const sessionId = transport.sessionId;
+    transports.set(sessionId, transport);
+
+    res.on("close", () => {
+      console.log(`SSE connection closed: ${sessionId}`);
+      transports.delete(sessionId);
+    });
+
+    await server.connect(transport);
+  });
+
+  // Messages endpoint - client sends messages here
+  app.post("/messages", async (req: Request, res: Response) => {
+    const sessionId = req.query.sessionId as string;
+
+    if (!sessionId) {
+      res.status(400).json({ error: "Missing sessionId query parameter" });
+      return;
+    }
+
+    const transport = transports.get(sessionId);
+    if (!transport) {
+      res.status(404).json({ error: "Session not found" });
+      return;
+    }
+
+    try {
+      await transport.handlePostMessage(req, res);
+    } catch (error) {
+      console.error("Error handling message:", error);
+      res.status(500).json({ error: "Internal server error" });
+    }
+  });
+
+  // Health check endpoint (no auth required would need separate router, so just include with auth)
+  app.get("/health", (_req: Request, res: Response) => {
+    res.json({ status: "ok", version: "1.1.0" });
+  });
+
+  app.listen(port, () => {
+    console.log(`YouTube MCP server running in remote mode on port ${port}`);
+    console.log(`SSE endpoint: http://localhost:${port}/sse`);
+    console.log(`Messages endpoint: http://localhost:${port}/messages`);
+  });
+}
+
+async function main() {
+  const { remote, port } = parseArgs();
+
+  if (remote) {
+    await runRemoteServer(port);
+  } else {
+    await runStdioServer();
+  }
+}
+
+main().catch(console.error);
