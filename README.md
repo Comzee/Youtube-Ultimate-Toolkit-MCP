@@ -1,5 +1,11 @@
 # YouTube Ultimate Toolkit MCP
 
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+[![Node.js](https://img.shields.io/badge/node-%3E%3D18-brightgreen)](https://nodejs.org/)
+[![GitHub stars](https://img.shields.io/github/stars/Comzee/Youtube-Ultimate-Toolkit-MCP)](https://github.com/Comzee/Youtube-Ultimate-Toolkit-MCP/stargazers)
+[![GitHub last commit](https://img.shields.io/github/last-commit/Comzee/Youtube-Ultimate-Toolkit-MCP)](https://github.com/Comzee/Youtube-Ultimate-Toolkit-MCP/commits/master)
+[![MCP](https://img.shields.io/badge/MCP-Compatible-blue)](https://modelcontextprotocol.io/)
+
 A powerful Model Context Protocol (MCP) server that gives Claude AI full access to YouTube content - transcripts, metadata, comments, screenshots, and audio clips.
 
 **Works with both Claude Desktop (local) and Claude Web UI (remote with OAuth).**
