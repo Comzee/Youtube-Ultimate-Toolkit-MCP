@@ -265,6 +265,140 @@ Disconnect and reconnect the MCP in Claude settings to refresh the tool list.
 - `.env` - OAuth credentials (not committed)
 - `.env.example` - Example environment file
 
+## Future Enhancements
+
+Features inspired by [Mohammad1704/youtube-transcript-mcp](https://github.com/Mohammad1704/youtube-transcript-mcp) that could be added:
+
+### 1. Multi-Language Support
+
+Currently English-only. Add language parameter to `get_video` with auto-detection fallback.
+
+**Implementation:**
+```typescript
+// In get_video tool, add language parameter
+language: z.string().default("auto").describe("Language code (en, es, fr, etc.) or 'auto' for detection")
+
+// Change subtitle fetch to use requested language
+"--sub-lang", language === "auto" ? "en.*,es,fr,de,ja,ko,zh" : `${language}.*`
+
+// Try multiple languages if auto-detection
+const languagesToTry = ['en', 'es', 'fr', 'de', 'tr', 'pt', 'ja', 'ko', 'zh', 'it', 'ru', 'ar'];
+for (const lang of languagesToTry) {
+  // Try each language, return first success with prefix: [Auto-detected: ${lang}]
+}
+```
+
+### 2. Transcript Caching
+
+Add in-memory cache with TTL to avoid re-fetching the same video.
+
+**Implementation:**
+```typescript
+// Cache structure
+interface CacheEntry {
+  data: string;
+  expiresAt: number;
+}
+const transcriptCache = new Map<string, CacheEntry>();
+
+const CACHE_TTL_MS = 7 * 24 * 60 * 60 * 1000; // 7 days
+const ERROR_CACHE_TTL_MS = 5 * 60 * 1000; // 5 minutes for errors
+
+// Cache key: videoId:language
+function getCacheKey(videoId: string, language: string): string {
+  return `${videoId}:${language}`;
+}
+
+// In get_video, check cache first
+const cached = transcriptCache.get(getCacheKey(videoId, language));
+if (cached && cached.expiresAt > Date.now()) {
+  return cached.data;
+}
+
+// After successful fetch, cache result
+transcriptCache.set(getCacheKey(videoId, language), {
+  data: result,
+  expiresAt: Date.now() + CACHE_TTL_MS
+});
+```
+
+### 3. Retry Logic with Exponential Backoff
+
+Add retry for transient yt-dlp failures.
+
+**Implementation:**
+```typescript
+async function runYtDlpWithRetry(args: string[], cwd?: string, maxRetries = 3): Promise<string> {
+  let lastError: Error;
+  let backoff = 1000; // Start with 1 second
+
+  for (let attempt = 0; attempt < maxRetries; attempt++) {
+    try {
+      return await runYtDlp(args, cwd);
+    } catch (error) {
+      lastError = error as Error;
+      console.log(`yt-dlp attempt ${attempt + 1} failed, retrying in ${backoff}ms...`);
+      await new Promise(resolve => setTimeout(resolve, backoff));
+      backoff *= 2; // Exponential backoff
+    }
+  }
+  throw lastError!;
+}
+```
+
+### 4. URL Normalization
+
+Explicit handling of all YouTube URL formats before passing to yt-dlp.
+
+**Reference:** See `/tmp/youtube-transcript-mcp/src/utils/url-normalize.ts` for comprehensive implementation supporting:
+- `youtube.com/watch?v=`
+- `youtu.be/`
+- `youtube.com/live/`
+- `youtube.com/embed/`
+- `youtube.com/shorts/`
+- International domains (youtube.co.uk, youtube.de, etc.)
+- Mobile URLs (m.youtube.com)
+
+### 5. Analytics Tracking
+
+Track usage metrics per video and daily totals.
+
+**Implementation:**
+```typescript
+// Simple in-memory analytics
+const analytics = {
+  dailyRequests: new Map<string, number>(), // date -> count
+  videoRequests: new Map<string, number>()  // videoId -> count
+};
+
+function trackRequest(videoId: string): void {
+  const today = new Date().toISOString().split('T')[0];
+  analytics.dailyRequests.set(today, (analytics.dailyRequests.get(today) || 0) + 1);
+  analytics.videoRequests.set(videoId, (analytics.videoRequests.get(videoId) || 0) + 1);
+}
+
+// Add /analytics endpoint to view stats
+app.get("/analytics", authMiddleware, (req, res) => {
+  res.json({
+    daily: Object.fromEntries(analytics.dailyRequests),
+    topVideos: [...analytics.videoRequests.entries()]
+      .sort((a, b) => b[1] - a[1])
+      .slice(0, 10)
+  });
+});
+```
+
+### Reference Repository
+
+The comparison codebase is available at: https://github.com/Mohammad1704/youtube-transcript-mcp
+
+Key differences from this implementation:
+- Runs on Cloudflare Workers (serverless) vs Node.js (self-hosted)
+- Uses `youtube-transcript` npm package vs `yt-dlp` binary
+- No authentication (public service) vs OAuth 2.1 + password protection
+- Has caching via Cloudflare KV vs no caching
+- Multi-language support vs English-only
+
 ## License
 
 MIT
