@@ -112,9 +112,31 @@ Actual tool calls (`tools/call`) require authentication.
 - **Bcrypt password hashing** - Password stored as bcrypt hash, not plaintext
 - **Rate limiting** - Max 5 attempts per IP before 10-minute lockout
 - **IP-based lockout** - Failed attempts tracked per IP with automatic lockout
+- **XSS protection** - All user-controlled OAuth parameters are HTML-escaped
+- **Command injection protection** - yt-dlp spawned with `shell: false`
 - PKCE (S256) is required for all authorization flows
 - Tokens are stored in memory (lost on restart)
 - CORS is configured for Claude Web UI access
+
+### Security Assessment
+
+| Layer | Protection | Status |
+|-------|-----------|--------|
+| Network | Cloudflare proxy | IP hidden, DDoS protection |
+| Transport | HTTPS/TLS | Via nginx + Let's Encrypt |
+| Authentication | Password-protected consent | Only owner can authorize |
+| Password Storage | Bcrypt hash | Not reversible |
+| Brute Force | Rate limiting + lockout | 5 attempts, 10min lockout |
+| XSS | HTML escaping | All OAuth params sanitized |
+| Command Injection | shell: false on spawn | Safe by design |
+| PKCE | S256 verification | Prevents code interception |
+
+**Threat Level: Low** - Suitable for personal use. Protected against script kiddies, automated scanners, and opportunistic attackers. No obvious attack surface for competent hackers.
+
+**Remaining theoretical risks:**
+- Password guessing (mitigated by lockout)
+- Zero-day in Node.js/Express (keep updated)
+- Password reuse from other compromised services
 
 ## Claude Web UI Setup
 
