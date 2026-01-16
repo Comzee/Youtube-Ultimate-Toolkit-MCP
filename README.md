@@ -1,10 +1,14 @@
-# YouTube Ultimate Toolkit MCP
+<p align="center">
+  <img src="assets/banner.png" alt="YouTube Ultimate Toolkit MCP" width="100%">
+</p>
 
-[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
-[![Node.js](https://img.shields.io/badge/node-%3E%3D18-brightgreen)](https://nodejs.org/)
-[![GitHub stars](https://img.shields.io/github/stars/Comzee/Youtube-Ultimate-Toolkit-MCP)](https://github.com/Comzee/Youtube-Ultimate-Toolkit-MCP/stargazers)
-[![GitHub last commit](https://img.shields.io/github/last-commit/Comzee/Youtube-Ultimate-Toolkit-MCP)](https://github.com/Comzee/Youtube-Ultimate-Toolkit-MCP/commits/master)
-[![MCP](https://img.shields.io/badge/MCP-Compatible-blue)](https://modelcontextprotocol.io/)
+<p align="center">
+  <a href="https://opensource.org/licenses/MIT"><img src="https://img.shields.io/badge/License-MIT-yellow.svg" alt="License: MIT"></a>
+  <a href="https://nodejs.org/"><img src="https://img.shields.io/badge/node-%3E%3D18-brightgreen" alt="Node.js"></a>
+  <a href="https://github.com/Comzee/Youtube-Ultimate-Toolkit-MCP/stargazers"><img src="https://img.shields.io/github/stars/Comzee/Youtube-Ultimate-Toolkit-MCP" alt="GitHub stars"></a>
+  <a href="https://github.com/Comzee/Youtube-Ultimate-Toolkit-MCP/commits/master"><img src="https://img.shields.io/github/last-commit/Comzee/Youtube-Ultimate-Toolkit-MCP" alt="GitHub last commit"></a>
+  <a href="https://modelcontextprotocol.io/"><img src="https://img.shields.io/badge/MCP-Compatible-blue" alt="MCP"></a>
+</p>
 
 A powerful Model Context Protocol (MCP) server that gives Claude AI full access to YouTube content - transcripts, metadata, comments, screenshots, and audio clips.
 
