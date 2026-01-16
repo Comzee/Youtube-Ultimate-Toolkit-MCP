@@ -4,6 +4,32 @@ A powerful Model Context Protocol (MCP) server that gives Claude AI full access 
 
 **Works with both Claude Desktop (local) and Claude Web UI (remote with OAuth).**
 
+## Demo
+
+![Demo](assets/demo.gif)
+
+[Watch full demo video (MP4)](assets/demo.mp4)
+
+## Why This MCP?
+
+| Feature | This MCP | Most Others |
+|---------|:--------:|:-----------:|
+| Transcripts | ✅ | ✅ |
+| Timestamps | ✅ | Some |
+| Time range filtering | ✅ | Rare |
+| Transcript search | ✅ | Rare |
+| Key segments (hook/outro) | ✅ | ❌ |
+| Metadata | ✅ | ✅ |
+| Playlists | ✅ | Some |
+| Comments | ✅ | Very rare |
+| Screenshots | ✅ | 1-2 others |
+| Audio clips | ✅ | ❌ |
+| All URL formats | ✅ | Partial |
+| OAuth 2.1 + PKCE | ✅ | ❌ |
+| Password protection | ✅ | ❌ |
+| Rate limiting | ✅ | ❌ |
+| Claude Web UI support | ✅ | Few |
+
 ## Features
 
 | Tool | Description |
