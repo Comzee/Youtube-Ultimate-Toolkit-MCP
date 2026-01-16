@@ -467,20 +467,7 @@ async function runYtDlpWithRetry(args: string[], cwd?: string, maxRetries = 3): 
 }
 ```
 
-### 4. URL Normalization
-
-Explicit handling of all YouTube URL formats before passing to yt-dlp.
-
-**Reference:** See `/tmp/youtube-transcript-mcp/src/utils/url-normalize.ts` for comprehensive implementation supporting:
-- `youtube.com/watch?v=`
-- `youtu.be/`
-- `youtube.com/live/`
-- `youtube.com/embed/`
-- `youtube.com/shorts/`
-- International domains (youtube.co.uk, youtube.de, etc.)
-- Mobile URLs (m.youtube.com)
-
-### 5. Analytics Tracking
+### 4. Analytics Tracking
 
 Track usage metrics per video and daily totals.
 
@@ -509,67 +496,7 @@ app.get("/analytics", authMiddleware, (req, res) => {
 });
 ```
 
-### 6. Search Within Transcript
-
-Search for keywords in the transcript and return highlighted matches with context.
-
-**Source:** [ZubeidHendricks/youtube-mcp-server](https://github.com/ZubeidHendricks/youtube-mcp-server)
-
-**Implementation:**
-```typescript
-// Add searchTerm parameter to get_video or create new tool
-searchTerm: z.string().optional().describe("Search for this term in transcript")
-
-// After getting transcript, filter and highlight matches
-if (searchTerm) {
-  const regex = new RegExp(searchTerm, 'gi');
-  const lines = transcript.split('\n');
-  const matches = lines
-    .map((line, i) => ({ line, index: i }))
-    .filter(({ line }) => regex.test(line))
-    .map(({ line, index }) => `[${index}] ${line.replace(regex, m => `**${m}**`)}`);
-
-  return `Found ${matches.length} matches:\n\n${matches.join('\n')}`;
-}
-```
-
-### 7. Timestamped Transcript Output
-
-Include timestamps with each line for "jump to" functionality.
-
-**Source:** [ZubeidHendricks/youtube-mcp-server](https://github.com/ZubeidHendricks/youtube-mcp-server)
-
-**Implementation:**
-```typescript
-// Add parameter
-includeTimestamps: z.boolean().default(false).describe("Include timestamps with transcript lines")
-
-// When parsing VTT, keep timestamps instead of stripping:
-// Parse: "00:01:23.456 --> 00:01:25.789" and associate with following text
-// Output: "[1:23] The transcript text here..."
-
-function parseVttWithTimestamps(vttContent: string): Array<{time: string, text: string}> {
-  const lines = vttContent.split('\n');
-  const result: Array<{time: string, text: string}> = [];
-  let currentTime = '';
-
-  for (const line of lines) {
-    const timeMatch = line.match(/(\d{2}):(\d{2}):(\d{2})\.\d{3}\s*-->/);
-    if (timeMatch) {
-      const hours = parseInt(timeMatch[1]);
-      const mins = parseInt(timeMatch[2]);
-      const secs = parseInt(timeMatch[3]);
-      currentTime = hours > 0 ? `${hours}:${mins}:${secs.toString().padStart(2,'0')}`
-                             : `${mins}:${secs.toString().padStart(2,'0')}`;
-    } else if (line.trim() && !line.includes('WEBVTT') && currentTime) {
-      result.push({ time: currentTime, text: line.trim() });
-    }
-  }
-  return result;
-}
-```
-
-### 8. Markdown Output Templates
+### 5. Markdown Output Templates
 
 Configurable output formats for different use cases (notes, blog posts, study guides).
 
@@ -612,7 +539,7 @@ function formatAsJson(metadata: any, transcript: string): string {
 }
 ```
 
-### 9. MCP Resource URIs
+### 6. MCP Resource URIs
 
 Expose videos as MCP resources for protocol compliance.
 
@@ -668,6 +595,58 @@ Key advantages of this implementation over all others:
 - Playlist support
 - **Screenshots** via ffmpeg (no external API dependency)
 - **Comments** via YouTube Data API v3
+
+## Project Prompt for Claude Web UI
+
+Use this prompt in a Claude Project to automatically leverage the MCP when YouTube URLs are shared:
+
+```
+You have access to the YouTube MCP server with 4 tools. Use them automatically when I share YouTube content.
+
+## Tools Available
+
+### get_video - Transcript & Metadata
+Fetches video title, channel, duration, views, upload date, and English transcript.
+
+**Parameters:**
+- `url` (required) - Any YouTube URL format: watch, youtu.be, shorts, live, embed, mobile, or just video ID
+- `includeTimestamps` - Add [M:SS] timestamps to each line (default: false)
+- `startTime` / `endTime` - Extract only a time range (e.g., "1:00" to "3:00")
+- `searchTerm` - Search transcript and return **highlighted** matches with context
+- `keySegmentsOnly` - Return only hook (first 40s) + outro (last 30s) for token savings
+
+### get_playlist - List Videos
+Lists all videos in a playlist with titles, durations, and URLs.
+- `url` (required) - Playlist URL
+- `limit` - Max videos (default: 50, max: 200)
+
+### get_comments - Video Comments
+Fetches top comments with author, likes, and reply counts.
+- `url` (required) - Video URL or ID
+- `maxResults` - Number of comments (default: 25, max: 100)
+- `order` - "relevance" (default) or "time"
+
+### get_screenshot - Video Frame Capture
+Captures a frame at any timestamp as an image.
+- `url` (required) - Video URL
+- `timestamp` - Time to capture (e.g., "30", "1:30", "1:30:00")
+
+## Default Behavior
+
+When I paste a YouTube URL:
+1. Automatically fetch the transcript with get_video (don't ask permission)
+2. Provide a summary (2-3 paragraphs), key takeaways, and notable quotes
+3. For long videos (10+ min), consider using keySegmentsOnly=true first
+
+## Advanced Usage Examples
+
+- "Search for 'budget' in this video" → use searchTerm parameter
+- "Get the transcript from 5:00 to 10:00" → use startTime/endTime
+- "Show me a screenshot at 2:30" → use get_screenshot
+- "What are people saying in the comments?" → use get_comments
+- "Just give me the intro and conclusion" → use keySegmentsOnly=true
+- "Get the transcript with timestamps" → use includeTimestamps=true
+```
 
 ## License
 
