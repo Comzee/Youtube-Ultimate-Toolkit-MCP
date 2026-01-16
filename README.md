@@ -369,7 +369,26 @@ Disconnect and reconnect the MCP in Claude settings to refresh the tool list.
 
 ## Future Enhancements
 
-Features inspired by [Mohammad1704/youtube-transcript-mcp](https://github.com/Mohammad1704/youtube-transcript-mcp) that could be added:
+Features inspired by various YouTube MCP implementations. Items marked ✅ are now implemented.
+
+### ✅ 4. URL Normalization (IMPLEMENTED)
+All YouTube URL formats now supported: watch, youtu.be, shorts, live, embed, mobile, music.youtube.com, and direct video IDs.
+
+### ✅ 6. Search Within Transcript (IMPLEMENTED)
+Use `searchTerm` parameter to find and **highlight** matches with context lines.
+
+### ✅ 7. Timestamped Transcript Output (IMPLEMENTED)
+Use `includeTimestamps: true` to get `[M:SS]` prefixes on each line.
+
+### ✅ Time Range Filtering (IMPLEMENTED)
+Use `startTime` and `endTime` parameters to extract only a portion of the transcript.
+
+### ✅ Key Segments Extraction (IMPLEMENTED)
+Use `keySegmentsOnly: true` to get only the hook (first 40s) and outro (last 30s) for token optimization.
+
+---
+
+### Remaining Future Enhancements:
 
 ### 1. Multi-Language Support
 
