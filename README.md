@@ -144,7 +144,7 @@ sudo journalctl -u youtube-mcp -f
 
 ## Nginx Configuration
 
-For remote mode behind nginx (grey-cloud DNS on Cloudflare, not proxied):
+For remote mode behind nginx (works with Cloudflare proxy enabled):
 
 ```nginx
 server {
@@ -216,7 +216,7 @@ pip3 install --upgrade --break-system-packages yt-dlp
 Disconnect and reconnect the MCP in Claude settings to refresh the tool list.
 
 ### MCP won't connect from Claude Web UI
-- Ensure DNS is grey-clouded (passthrough) on Cloudflare, not orange-clouded (proxied)
+- Cloudflare proxy (orange-cloud) is supported
 - Check service is running: `sudo systemctl status youtube-mcp`
 - Check logs: `sudo journalctl -u youtube-mcp -f`
 
