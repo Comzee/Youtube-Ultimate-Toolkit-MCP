@@ -619,11 +619,28 @@ async function runRemoteServer(port: number) {
     res.redirect(redirectUrl.toString());
   });
 
+  // Helper to escape HTML entities to prevent XSS
+  function escapeHtml(str: string): string {
+    return str
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;')
+      .replace(/'/g, '&#39;');
+  }
+
   // Helper to render consent page HTML with password form
   function renderConsentPage(approveUrl: string): string {
     // Parse the URL to extract query parameters for hidden form fields
     const url = new URL(approveUrl);
     const params = url.searchParams;
+
+    // Escape all user-controlled values to prevent XSS
+    const clientId = escapeHtml(params.get('client_id') || '');
+    const redirectUri = escapeHtml(params.get('redirect_uri') || '');
+    const codeChallenge = escapeHtml(params.get('code_challenge') || '');
+    const codeChallengeMethod = escapeHtml(params.get('code_challenge_method') || 'S256');
+    const state = escapeHtml(params.get('state') || '');
 
     return `<!DOCTYPE html>
 <html>
@@ -661,11 +678,11 @@ async function runRemoteServer(port: number) {
     </div>
     <p>Enter password to authorize:</p>
     <form method="POST" action="${url.pathname}">
-      <input type="hidden" name="client_id" value="${params.get('client_id') || ''}">
-      <input type="hidden" name="redirect_uri" value="${params.get('redirect_uri') || ''}">
-      <input type="hidden" name="code_challenge" value="${params.get('code_challenge') || ''}">
-      <input type="hidden" name="code_challenge_method" value="${params.get('code_challenge_method') || 'S256'}">
-      <input type="hidden" name="state" value="${params.get('state') || ''}">
+      <input type="hidden" name="client_id" value="${clientId}">
+      <input type="hidden" name="redirect_uri" value="${redirectUri}">
+      <input type="hidden" name="code_challenge" value="${codeChallenge}">
+      <input type="hidden" name="code_challenge_method" value="${codeChallengeMethod}">
+      <input type="hidden" name="state" value="${state}">
       <input type="password" name="password" class="password-field" placeholder="Password" required autofocus>
       <button type="submit" class="btn">Authorize</button>
     </form>
