@@ -4,13 +4,16 @@ After=network.target
 
 [Service]
 Type=simple
-User=comzee
-WorkingDirectory=/home/comzee/Apps/YoutubeMCP
-ExecStart=/usr/bin/node /home/comzee/Apps/YoutubeMCP/dist/index.js --remote --port 3010
+# CONFIGURE: Replace YOUR_USERNAME with your system username
+User=YOUR_USERNAME
+# CONFIGURE: Replace with your installation path
+WorkingDirectory=/home/YOUR_USERNAME/youtube-mcp
+ExecStart=/usr/bin/node /home/YOUR_USERNAME/youtube-mcp/dist/index.js --remote --port 3010
 Restart=on-failure
 RestartSec=10
 Environment=NODE_ENV=production
-EnvironmentFile=/home/comzee/Apps/YoutubeMCP/.env
+# CONFIGURE: Replace with your .env file path
+EnvironmentFile=/home/YOUR_USERNAME/youtube-mcp/.env
 
 [Install]
 WantedBy=multi-user.target
