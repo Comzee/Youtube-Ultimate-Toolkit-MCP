@@ -523,7 +523,7 @@ function parseTimestamp(timestamp: string): number {
 function createMcpServer(): McpServer {
   const server = new McpServer({
     name: "youtube-mcp",
-    version: "2.1.0",
+    version: "2.2.0",
   });
 
   // Tool: get_video - fetch metadata and transcript with advanced options
@@ -888,6 +888,114 @@ function createMcpServer(): McpServer {
     }
   );
 
+  // Tool: get_audio - extract audio clip from a video
+  server.tool(
+    "get_audio",
+    "Extract an audio clip from a YouTube video. Returns base64-encoded MP3. " +
+    "Use time range parameters to limit duration (max 120 seconds). " +
+    "Useful for analyzing speech, music, or audio when transcript isn't available.",
+    {
+      url: z.string().describe("YouTube video URL"),
+      startTime: z.string().default("0").describe("Start time (e.g., '30', '1:30', '1:30:00'). Default: 0"),
+      endTime: z.string().optional().describe("End time. If not specified, extracts up to maxDuration from startTime"),
+      maxDuration: z.number().default(60).describe("Maximum duration in seconds (default: 60, max: 120)"),
+    },
+    async ({ url, startTime, endTime, maxDuration }) => {
+      console.log(`get_audio: Starting for ${url}, startTime=${startTime}, endTime=${endTime}, maxDuration=${maxDuration}`);
+
+      const tempDir = fs.mkdtempSync(`${os.tmpdir()}${path.sep}youtube-audio-`);
+      const startSeconds = parseTimestamp(startTime);
+      const endSeconds = endTime ? parseTimestamp(endTime) : undefined;
+
+      // Cap maxDuration at 120 seconds
+      const effectiveMaxDuration = Math.min(maxDuration, 120);
+
+      // Calculate actual duration
+      let duration: number;
+      if (endSeconds !== undefined) {
+        duration = Math.min(endSeconds - startSeconds, effectiveMaxDuration);
+      } else {
+        duration = effectiveMaxDuration;
+      }
+
+      if (duration <= 0) {
+        return {
+          content: [{ type: "text" as const, text: "Error: Invalid time range - end time must be after start time" }],
+          isError: true,
+        };
+      }
+
+      try {
+        // Get audio stream URL using yt-dlp
+        console.log("get_audio: Getting audio stream URL...");
+        const streamUrl = await runYtDlp([
+          "--get-url",
+          "--format", "bestaudio[ext=m4a]/bestaudio",
+          "--no-warnings",
+          "--no-playlist",
+          url
+        ]);
+
+        const audioStreamUrl = streamUrl.trim().split("\n")[0];
+
+        if (!audioStreamUrl) {
+          return {
+            content: [{ type: "text" as const, text: "Error: Could not get audio stream URL" }],
+            isError: true,
+          };
+        }
+
+        // Extract audio clip using ffmpeg
+        const outputPath = path.join(tempDir, "audio.mp3");
+        console.log(`get_audio: Extracting ${duration}s audio starting at ${startSeconds}s...`);
+
+        await runFfmpeg([
+          "-ss", startSeconds.toString(),
+          "-i", audioStreamUrl,
+          "-t", duration.toString(),
+          "-vn",              // No video
+          "-acodec", "libmp3lame",
+          "-ab", "128k",      // 128kbps bitrate (good balance of quality/size)
+          "-ar", "44100",     // 44.1kHz sample rate
+          "-y",               // Overwrite
+          outputPath
+        ]);
+
+        // Read the audio file and convert to base64
+        const audioBuffer = fs.readFileSync(outputPath);
+        const base64Audio = audioBuffer.toString("base64");
+        const fileSizeKB = Math.round(audioBuffer.length / 1024);
+
+        console.log(`get_audio: Success! Audio size: ${fileSizeKB}KB, duration: ${duration}s`);
+
+        // Check if file is too large (warn if > 5MB)
+        if (audioBuffer.length > 5 * 1024 * 1024) {
+          console.warn(`get_audio: Warning - audio file is ${fileSizeKB}KB, may be too large for some contexts`);
+        }
+
+        return {
+          content: [{
+            type: "resource" as const,
+            resource: {
+              uri: `data:audio/mpeg;base64,${base64Audio}`,
+              mimeType: "audio/mpeg",
+              text: `Audio clip: ${duration}s starting at ${formatTimestampFromSeconds(startSeconds).replace(/[\[\]]/g, '')} (${fileSizeKB}KB)`
+            }
+          }],
+        };
+      } catch (err) {
+        const error = err as Error;
+        console.error("get_audio error:", error.message);
+        return {
+          content: [{ type: "text" as const, text: `Error: ${error.message}` }],
+          isError: true,
+        };
+      } finally {
+        rimraf.sync(tempDir);
+      }
+    }
+  );
+
   return server;
 }
 
@@ -1229,6 +1337,7 @@ async function runRemoteServer(port: number) {
       <span class="scope">get_playlist</span>
       <span class="scope">get_comments</span>
       <span class="scope">get_screenshot</span>
+      <span class="scope">get_audio</span>
     </div>
     <p>Enter password to authorize:</p>
     <form method="POST" action="${url.pathname}">

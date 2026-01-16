@@ -8,6 +8,7 @@ A Model Context Protocol (MCP) server that fetches YouTube video metadata and tr
 - **get_playlist**: Lists all videos in a YouTube playlist with titles, durations, and URLs
 - **get_comments**: Fetches top comments with author, text, likes, and reply counts (requires YouTube API key)
 - **get_screenshot**: Captures a frame from a video at any timestamp (requires ffmpeg)
+- **get_audio**: Extracts audio clips (max 120s) for speech/music analysis (requires ffmpeg)
 - **OAuth 2.1 Authentication**: Secure access with PKCE, consent page, and token management
 
 ## Requirements
@@ -328,6 +329,34 @@ Captures a screenshot from a YouTube video at a specific timestamp.
 
 **Note:** Requires ffmpeg to be installed (`apt install ffmpeg` on Ubuntu).
 
+### get_audio
+
+Extracts an audio clip from a YouTube video for speech or music analysis.
+
+**Parameters:**
+- `url` (required): YouTube video URL
+- `startTime` (optional): Start time for the clip (default: "0")
+  - Accepts seconds: "30", "90.5"
+  - Accepts MM:SS format: "1:30"
+  - Accepts HH:MM:SS format: "1:30:00"
+- `endTime` (optional): End time for the clip. If not specified, extracts up to maxDuration from startTime
+- `maxDuration` (optional): Maximum duration in seconds (default: 60, max: 120)
+
+**Returns:** Base64-encoded MP3 audio (128kbps)
+
+**Example Usage:**
+- Extract first 30 seconds: `{ url: "...", maxDuration: 30 }`
+- Extract 1:00-2:00: `{ url: "...", startTime: "1:00", endTime: "2:00" }`
+- Extract chorus at 2:30: `{ url: "...", startTime: "2:30", maxDuration: 45 }`
+
+**Use Cases:**
+- Analyzing speech when transcript isn't available or is poor quality
+- Analyzing music (instruments, mood, tempo)
+- Extracting audio from non-English videos
+- Getting audio context for specific moments in a video
+
+**Note:** Requires ffmpeg. Audio is capped at 120 seconds to prevent excessive file sizes.
+
 ## Troubleshooting
 
 ### "No English transcript available"
@@ -594,6 +623,7 @@ Key advantages of this implementation over all others:
 - Full metadata + transcript in single call
 - Playlist support
 - **Screenshots** via ffmpeg (no external API dependency)
+- **Audio extraction** for speech/music analysis (max 120s)
 - **Comments** via YouTube Data API v3
 
 ## Project Prompt for Claude Web UI
@@ -601,7 +631,7 @@ Key advantages of this implementation over all others:
 Use this prompt in a Claude Project to automatically leverage the MCP when YouTube URLs are shared:
 
 ```
-You have access to the YouTube MCP server with 4 tools. Use them automatically when I share YouTube content.
+You have access to the YouTube MCP server with 5 tools. Use them automatically when I share YouTube content.
 
 ## Tools Available
 
@@ -631,6 +661,13 @@ Captures a frame at any timestamp as an image.
 - `url` (required) - Video URL
 - `timestamp` - Time to capture (e.g., "30", "1:30", "1:30:00")
 
+### get_audio - Audio Clip Extraction
+Extracts audio clips (max 120s) for speech or music analysis.
+- `url` (required) - Video URL
+- `startTime` - Start time (default: "0")
+- `endTime` - End time (optional, defaults to startTime + maxDuration)
+- `maxDuration` - Max clip duration in seconds (default: 60, max: 120)
+
 ## Default Behavior
 
 When I paste a YouTube URL:
@@ -646,6 +683,8 @@ When I paste a YouTube URL:
 - "What are people saying in the comments?" → use get_comments
 - "Just give me the intro and conclusion" → use keySegmentsOnly=true
 - "Get the transcript with timestamps" → use includeTimestamps=true
+- "Let me hear the intro music" → use get_audio with maxDuration: 30
+- "What does the speaker sound like at 5:00?" → use get_audio with startTime: "5:00"
 ```
 
 ## License
