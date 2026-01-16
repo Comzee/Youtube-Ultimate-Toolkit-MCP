@@ -221,11 +221,60 @@ function formatPlaylist(playlist: { title: string; channel: string; videos: Play
   return lines.join("\n");
 }
 
-// Extract video ID from YouTube URL
+// Extract video ID from any YouTube URL format (robust version)
 function extractVideoId(url: string): string | null {
+  if (!url) return null;
+
+  // Handle raw 11-character video ID directly
+  if (/^[a-zA-Z0-9_-]{11}$/.test(url.trim())) {
+    return url.trim();
+  }
+
+  // Prepend https:// if no protocol
+  let normalizedUrl = url.trim();
+  if (!/^https?:\/\//i.test(normalizedUrl)) {
+    normalizedUrl = "https://" + normalizedUrl;
+  }
+
+  try {
+    const parsed = new URL(normalizedUrl);
+    const hostname = parsed.hostname.toLowerCase();
+
+    // youtu.be shortlinks
+    if (hostname === "youtu.be") {
+      const videoId = parsed.pathname.slice(1).split("/")[0].split("?")[0];
+      if (videoId && /^[a-zA-Z0-9_-]{11}$/.test(videoId)) {
+        return videoId;
+      }
+    }
+
+    // youtube.com variants (www, m, music)
+    const youtubePattern = /^(?:www\.|m\.|music\.)?youtube\.com$/;
+    if (youtubePattern.test(hostname)) {
+      // /watch?v=VIDEO_ID
+      if (parsed.pathname === "/watch") {
+        const videoId = parsed.searchParams.get("v");
+        if (videoId && /^[a-zA-Z0-9_-]{11}$/.test(videoId)) {
+          return videoId;
+        }
+      }
+
+      // /embed/VIDEO_ID, /shorts/VIDEO_ID, /live/VIDEO_ID, /v/VIDEO_ID
+      const pathParts = parsed.pathname.split("/");
+      if (pathParts.length >= 3 && ["embed", "shorts", "live", "v"].includes(pathParts[1])) {
+        const videoId = pathParts[2].split("?")[0];
+        if (videoId && /^[a-zA-Z0-9_-]{11}$/.test(videoId)) {
+          return videoId;
+        }
+      }
+    }
+  } catch {
+    // URL parsing failed, try regex fallback
+  }
+
+  // Fallback: try regex patterns
   const patterns = [
-    /(?:youtube\.com\/watch\?v=|youtu\.be\/|youtube\.com\/embed\/|youtube\.com\/v\/)([a-zA-Z0-9_-]{11})/,
-    /^([a-zA-Z0-9_-]{11})$/, // Direct video ID
+    /(?:youtube\.com\/watch\?v=|youtu\.be\/|youtube\.com\/embed\/|youtube\.com\/v\/|youtube\.com\/shorts\/|youtube\.com\/live\/)([a-zA-Z0-9_-]{11})/,
   ];
 
   for (const pattern of patterns) {
@@ -234,7 +283,170 @@ function extractVideoId(url: string): string | null {
       return match[1];
     }
   }
+
   return null;
+}
+
+// Transcript segment with timestamp
+interface TranscriptSegment {
+  startSeconds: number;
+  text: string;
+  timestamp: string; // Formatted as [M:SS] or [H:MM:SS]
+}
+
+// Parse VTT content and return segments with timestamps
+function parseVttWithTimestamps(vttContent: string): TranscriptSegment[] {
+  if (!vttContent || vttContent.trim() === "") {
+    return [];
+  }
+
+  const lines = vttContent.split("\n");
+  if (lines.length < 4 || !lines[0].includes("WEBVTT")) {
+    return [];
+  }
+
+  const segments: TranscriptSegment[] = [];
+  let currentStartSeconds = 0;
+  let currentTimestamp = "";
+
+  for (let i = 4; i < lines.length; i++) {
+    const line = lines[i];
+
+    // Parse timestamp line: "00:01:23.456 --> 00:01:25.789"
+    const timeMatch = line.match(/(\d{2}):(\d{2}):(\d{2})\.(\d{3})\s*-->/);
+    if (timeMatch) {
+      const hours = parseInt(timeMatch[1]);
+      const mins = parseInt(timeMatch[2]);
+      const secs = parseInt(timeMatch[3]);
+      currentStartSeconds = hours * 3600 + mins * 60 + secs;
+      currentTimestamp = hours > 0
+        ? `[${hours}:${mins.toString().padStart(2, "0")}:${secs.toString().padStart(2, "0")}]`
+        : `[${mins}:${secs.toString().padStart(2, "0")}]`;
+      continue;
+    }
+
+    // Skip metadata lines
+    if (line.includes("align:") || line.includes("position:")) continue;
+    if (line.trim() === "") continue;
+
+    // Clean the text
+    const cleanedLine = line
+      .replace(/<\d{2}:\d{2}:\d{2}\.\d{3}>/g, "")
+      .replace(/<\/?c>/g, "")
+      .replace(/<[^>]+>/g, "")
+      .replace(/&nbsp;/g, " ")
+      .replace(/&amp;/g, "&")
+      .replace(/&lt;/g, "<")
+      .replace(/&gt;/g, ">")
+      .replace(/&quot;/g, '"')
+      .replace(/&#39;/g, "'")
+      .replace(/&apos;/g, "'")
+      .trim();
+
+    if (cleanedLine && currentTimestamp) {
+      segments.push({
+        startSeconds: currentStartSeconds,
+        text: cleanedLine,
+        timestamp: currentTimestamp,
+      });
+    }
+  }
+
+  // Deduplicate consecutive identical text
+  const uniqueSegments: TranscriptSegment[] = [];
+  for (let i = 0; i < segments.length; i++) {
+    if (i === 0 || segments[i].text !== segments[i - 1].text) {
+      uniqueSegments.push(segments[i]);
+    }
+  }
+
+  return uniqueSegments;
+}
+
+// Format timestamp from seconds
+function formatTimestampFromSeconds(seconds: number): string {
+  const hours = Math.floor(seconds / 3600);
+  const mins = Math.floor((seconds % 3600) / 60);
+  const secs = Math.floor(seconds % 60);
+  return hours > 0
+    ? `[${hours}:${mins.toString().padStart(2, "0")}:${secs.toString().padStart(2, "0")}]`
+    : `[${mins}:${secs.toString().padStart(2, "0")}]`;
+}
+
+// Filter segments by time range
+function filterByTimeRange(
+  segments: TranscriptSegment[],
+  startTime?: number,
+  endTime?: number
+): TranscriptSegment[] {
+  return segments.filter((seg) => {
+    if (startTime !== undefined && seg.startSeconds < startTime) return false;
+    if (endTime !== undefined && seg.startSeconds > endTime) return false;
+    return true;
+  });
+}
+
+// Search within transcript segments
+function searchTranscript(
+  segments: TranscriptSegment[],
+  searchTerm: string,
+  contextLines: number = 1
+): { matches: TranscriptSegment[]; totalMatches: number } {
+  const searchLower = searchTerm.toLowerCase();
+  const matchedIndices: number[] = [];
+
+  // Find matching indices
+  segments.forEach((seg, i) => {
+    if (seg.text.toLowerCase().includes(searchLower)) {
+      matchedIndices.push(i);
+    }
+  });
+
+  // Expand with context
+  const expandedIndices = new Set<number>();
+  for (const idx of matchedIndices) {
+    for (let i = Math.max(0, idx - contextLines); i <= Math.min(segments.length - 1, idx + contextLines); i++) {
+      expandedIndices.add(i);
+    }
+  }
+
+  // Get segments and highlight matches
+  const sortedIndices = Array.from(expandedIndices).sort((a, b) => a - b);
+  const matches = sortedIndices.map((i) => {
+    const seg = segments[i];
+    // Highlight the search term with **markers**
+    const regex = new RegExp(`(${searchTerm.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')})`, 'gi');
+    return {
+      ...seg,
+      text: matchedIndices.includes(i) ? seg.text.replace(regex, '**$1**') : seg.text,
+    };
+  });
+
+  return { matches, totalMatches: matchedIndices.length };
+}
+
+// Extract key segments (hook and outro) for token optimization
+function extractKeySegments(
+  segments: TranscriptSegment[],
+  hookDuration: number = 40,
+  outroDuration: number = 30
+): { hook: TranscriptSegment[]; outro: TranscriptSegment[]; summary: string } {
+  if (segments.length === 0) {
+    return { hook: [], outro: [], summary: "No transcript available" };
+  }
+
+  const lastTimestamp = segments[segments.length - 1].startSeconds;
+  const outroStart = Math.max(0, lastTimestamp - outroDuration);
+
+  const hook = segments.filter((seg) => seg.startSeconds < hookDuration);
+  const outro = segments.filter((seg) => seg.startSeconds >= outroStart);
+
+  const hookText = hook.map((s) => s.text).join(" ");
+  const outroText = outro.map((s) => s.text).join(" ");
+
+  const summary = `--- HOOK (first ${hookDuration}s) ---\n${hookText}\n\n--- OUTRO (last ${outroDuration}s) ---\n${outroText}`;
+
+  return { hook, outro, summary };
 }
 
 // Format comment for display
@@ -311,31 +523,37 @@ function parseTimestamp(timestamp: string): number {
 function createMcpServer(): McpServer {
   const server = new McpServer({
     name: "youtube-mcp",
-    version: "2.0.0",
+    version: "2.1.0",
   });
 
-  // Tool: get_video - fetch metadata and transcript
+  // Tool: get_video - fetch metadata and transcript with advanced options
   server.tool(
     "get_video",
-    "Get a YouTube video's metadata and English transcript. " +
-    "Returns title, channel, duration, views, upload date, followed by the full transcript. " +
-    "Use this to summarize YouTube videos or extract key takeaways.",
+    "Get a YouTube video's metadata and English transcript with advanced options. " +
+    "Supports timestamps, time range filtering, search within transcript, and key segments extraction. " +
+    "Use this to summarize YouTube videos, find specific moments, or extract key takeaways.",
     {
-      url: z.string().describe("YouTube video URL"),
+      url: z.string().describe("YouTube video URL (supports all formats: watch, youtu.be, shorts, live, embed, mobile)"),
+      includeTimestamps: z.boolean().default(false).describe("Include timestamps with each line (e.g., [1:23] text)"),
+      startTime: z.string().optional().describe("Start time for transcript range (e.g., '60', '1:00', '1:00:00')"),
+      endTime: z.string().optional().describe("End time for transcript range (e.g., '120', '2:00')"),
+      searchTerm: z.string().optional().describe("Search for this term in transcript - returns matching lines with context"),
+      keySegmentsOnly: z.boolean().default(false).describe("Return only hook (first 40s) and outro (last 30s) for token optimization"),
     },
-    async ({ url }) => {
+    async ({ url, includeTimestamps, startTime, endTime, searchTerm, keySegmentsOnly }) => {
       const language = "en";
       console.log(`get_video: Starting for ${url}`);
+      console.log(`  Options: timestamps=${includeTimestamps}, startTime=${startTime}, endTime=${endTime}, search=${searchTerm}, keyOnly=${keySegmentsOnly}`);
 
       const tempDir = fs.mkdtempSync(`${os.tmpdir()}${path.sep}youtube-`);
 
       try {
         console.log("get_video: Running yt-dlp...");
-        const startTime = Date.now();
+        const fetchStart = Date.now();
 
         // Get metadata first (fast, ~1-2s)
         const metadataJson = await runYtDlp(["--dump-json", "--no-download", "--no-warnings", "--no-playlist", url]);
-        console.log(`get_video: metadata fetched in ${Date.now() - startTime}ms`);
+        console.log(`get_video: metadata fetched in ${Date.now() - fetchStart}ms`);
 
         // Then get subtitles (can fail, that's ok)
         // Use en.* to match en, en-US, en-GB, en-orig, etc.
@@ -354,27 +572,26 @@ function createMcpServer(): McpServer {
         } catch (subErr) {
           console.log(`get_video: subtitle fetch failed (continuing anyway): ${(subErr as Error).message}`);
         }
-        console.log(`get_video: yt-dlp completed in ${Date.now() - startTime}ms`);
+        console.log(`get_video: yt-dlp completed in ${Date.now() - fetchStart}ms`);
 
         // Format metadata header
         const metadataHeader = formatCompactMetadata(metadataJson);
 
-        // Get transcript
-        let transcript = "";
+        // Get transcript with timestamps
+        let segments: TranscriptSegment[] = [];
         const files = fs.readdirSync(tempDir);
 
         for (const file of files) {
           if (file.endsWith(".vtt")) {
             const fileContent = fs.readFileSync(path.join(tempDir, file), "utf8");
-            const cleanedContent = stripVttContent(fileContent);
-            if (cleanedContent) {
-              transcript = cleanedContent;
+            segments = parseVttWithTimestamps(fileContent);
+            if (segments.length > 0) {
               break;
             }
           }
         }
 
-        if (!transcript) {
+        if (segments.length === 0) {
           console.log("get_video: No transcript found, returning result");
           return {
             content: [{
@@ -384,11 +601,74 @@ function createMcpServer(): McpServer {
           };
         }
 
+        // Apply key segments extraction if requested (takes priority)
+        if (keySegmentsOnly) {
+          const keySegs = extractKeySegments(segments);
+          console.log(`get_video: Returning key segments (hook: ${keySegs.hook.length}, outro: ${keySegs.outro.length})`);
+          return {
+            content: [{
+              type: "text" as const,
+              text: `${metadataHeader}\n\n---\nKey Segments (Token Optimized):\n\n${keySegs.summary}`
+            }],
+          };
+        }
+
+        // Apply time range filtering if specified
+        const startSeconds = startTime ? parseTimestamp(startTime) : undefined;
+        const endSeconds = endTime ? parseTimestamp(endTime) : undefined;
+
+        if (startSeconds !== undefined || endSeconds !== undefined) {
+          const beforeCount = segments.length;
+          segments = filterByTimeRange(segments, startSeconds, endSeconds);
+          console.log(`get_video: Time filter applied (${beforeCount} -> ${segments.length} segments)`);
+        }
+
+        // Apply search if specified
+        if (searchTerm) {
+          const searchResult = searchTranscript(segments, searchTerm, 2);
+          if (searchResult.totalMatches === 0) {
+            return {
+              content: [{
+                type: "text" as const,
+                text: `${metadataHeader}\n\n---\nSearch Results:\n\nNo matches found for "${searchTerm}" in transcript.`
+              }],
+            };
+          }
+
+          const searchOutput = searchResult.matches
+            .map((seg) => `${seg.timestamp} ${seg.text}`)
+            .join("\n");
+
+          console.log(`get_video: Search found ${searchResult.totalMatches} matches`);
+          return {
+            content: [{
+              type: "text" as const,
+              text: `${metadataHeader}\n\n---\nSearch Results for "${searchTerm}" (${searchResult.totalMatches} matches):\n\n${searchOutput}`
+            }],
+          };
+        }
+
+        // Format output based on timestamp preference
+        let transcript: string;
+        if (includeTimestamps) {
+          transcript = segments.map((seg) => `${seg.timestamp} ${seg.text}`).join("\n");
+        } else {
+          transcript = segments.map((seg) => seg.text).join("\n");
+        }
+
+        // Add range info to header if filtered
+        let rangeInfo = "";
+        if (startSeconds !== undefined || endSeconds !== undefined) {
+          const startStr = startSeconds !== undefined ? formatTimestampFromSeconds(startSeconds) : "[start]";
+          const endStr = endSeconds !== undefined ? formatTimestampFromSeconds(endSeconds) : "[end]";
+          rangeInfo = ` (${startStr} - ${endStr})`;
+        }
+
         console.log(`get_video: Success! Transcript length: ${transcript.length} chars`);
         return {
           content: [{
             type: "text" as const,
-            text: `${metadataHeader}\n\n---\nTranscript:\n\n${transcript}`
+            text: `${metadataHeader}\n\n---\nTranscript${rangeInfo}:\n\n${transcript}`
           }],
         };
       } catch (err) {

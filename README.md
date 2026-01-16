@@ -208,12 +208,29 @@ server {
 
 ### get_video
 
-Fetches video metadata and English transcript.
+Fetches video metadata and English transcript with advanced options.
 
 **Parameters:**
-- `url` (required): YouTube video URL
+- `url` (required): YouTube video URL (supports all formats: watch, youtu.be, shorts, live, embed, mobile)
+- `includeTimestamps` (optional): Include timestamps with each line (default: false)
+- `startTime` (optional): Start time for transcript range (e.g., "60", "1:00", "1:00:00")
+- `endTime` (optional): End time for transcript range
+- `searchTerm` (optional): Search for this term - returns matching lines with context
+- `keySegmentsOnly` (optional): Return only hook (first 40s) and outro (last 30s) for token optimization
 
-**Returns:**
+**URL Formats Supported:**
+- `youtube.com/watch?v=VIDEO_ID`
+- `youtu.be/VIDEO_ID`
+- `youtube.com/shorts/VIDEO_ID`
+- `youtube.com/live/VIDEO_ID`
+- `youtube.com/embed/VIDEO_ID`
+- `m.youtube.com/watch?v=VIDEO_ID` (mobile)
+- `music.youtube.com/watch?v=VIDEO_ID`
+- Direct video ID: `dQw4w9WgXcQ`
+
+**Example Returns:**
+
+*Basic (no options):*
 ```
 Title: Video Title Here
 Channel: Channel Name
@@ -223,6 +240,46 @@ Duration: 12:34 | Views: 1,234,567 | Uploaded: 2024-01-15
 Transcript:
 
 The cleaned transcript text appears here...
+```
+
+*With timestamps (`includeTimestamps: true`):*
+```
+---
+Transcript:
+
+[0:00] Welcome to this video
+[0:05] Today we're going to talk about...
+[1:23] The main point is...
+```
+
+*With time range (`startTime: "1:00", endTime: "2:00"`):*
+```
+---
+Transcript ([1:00] - [2:00]):
+
+Only the transcript from 1:00 to 2:00 appears here...
+```
+
+*With search (`searchTerm: "machine learning"`):*
+```
+---
+Search Results for "machine learning" (3 matches):
+
+[2:15] ...and that's where **machine learning** comes in
+[2:18] The key to **machine learning** is data
+[5:42] So to summarize, **machine learning** enables...
+```
+
+*Key segments only (`keySegmentsOnly: true`):*
+```
+---
+Key Segments (Token Optimized):
+
+--- HOOK (first 40s) ---
+The opening hook text from the video intro...
+
+--- OUTRO (last 30s) ---
+The closing text from the video outro...
 ```
 
 ### get_playlist
