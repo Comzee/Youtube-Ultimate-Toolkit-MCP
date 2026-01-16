@@ -8,11 +8,26 @@ import os from "node:os";
 import fs from "node:fs";
 import path from "node:path";
 import crypto from "node:crypto";
-import { spawn } from "node:child_process";
+import { spawn, execSync } from "node:child_process";
 import { rimraf } from "rimraf";
 import express, { Request, Response, NextFunction } from "express";
 import bcrypt from "bcrypt";
 import { z } from "zod";
+import { google } from "googleapis";
+
+// YouTube API configuration
+const YOUTUBE_API_KEY = process.env.YOUTUBE_API_KEY;
+let youtube: ReturnType<typeof google.youtube> | null = null;
+
+function getYouTubeClient() {
+  if (!youtube && YOUTUBE_API_KEY) {
+    youtube = google.youtube({
+      version: "v3",
+      auth: YOUTUBE_API_KEY,
+    });
+  }
+  return youtube;
+}
 
 // Parse command line arguments
 function parseArgs(): { remote: boolean; port: number } {
@@ -206,6 +221,92 @@ function formatPlaylist(playlist: { title: string; channel: string; videos: Play
   return lines.join("\n");
 }
 
+// Extract video ID from YouTube URL
+function extractVideoId(url: string): string | null {
+  const patterns = [
+    /(?:youtube\.com\/watch\?v=|youtu\.be\/|youtube\.com\/embed\/|youtube\.com\/v\/)([a-zA-Z0-9_-]{11})/,
+    /^([a-zA-Z0-9_-]{11})$/, // Direct video ID
+  ];
+
+  for (const pattern of patterns) {
+    const match = url.match(pattern);
+    if (match) {
+      return match[1];
+    }
+  }
+  return null;
+}
+
+// Format comment for display
+interface CommentData {
+  author: string;
+  text: string;
+  likes: number;
+  publishedAt: string;
+  replyCount: number;
+}
+
+function formatComments(comments: CommentData[], videoTitle: string): string {
+  const lines = [
+    `Comments for: ${videoTitle}`,
+    `Total shown: ${comments.length}`,
+    "",
+  ];
+
+  for (const comment of comments) {
+    const likesStr = comment.likes > 0 ? ` (${comment.likes} likes)` : "";
+    const repliesStr = comment.replyCount > 0 ? ` [${comment.replyCount} replies]` : "";
+    lines.push(`@${comment.author}${likesStr}${repliesStr}`);
+    lines.push(`  ${comment.text.replace(/\n/g, "\n  ")}`);
+    lines.push("");
+  }
+
+  return lines.join("\n");
+}
+
+// Run ffmpeg command
+async function runFfmpeg(args: string[]): Promise<void> {
+  return new Promise((resolve, reject) => {
+    const proc = spawn("ffmpeg", args, {
+      shell: false,
+      windowsHide: true,
+    });
+
+    let stderr = "";
+    proc.stderr.on("data", (data) => { stderr += data.toString(); });
+
+    proc.on("close", (code) => {
+      if (code === 0) {
+        resolve();
+      } else {
+        reject(new Error(`ffmpeg failed (code ${code}): ${stderr}`));
+      }
+    });
+
+    proc.on("error", (err) => {
+      reject(new Error(`Failed to spawn ffmpeg: ${err.message}`));
+    });
+  });
+}
+
+// Parse timestamp string to seconds (supports MM:SS, HH:MM:SS, or just seconds)
+function parseTimestamp(timestamp: string): number {
+  // If it's just a number, treat it as seconds
+  if (/^\d+(\.\d+)?$/.test(timestamp)) {
+    return parseFloat(timestamp);
+  }
+
+  // Parse MM:SS or HH:MM:SS format
+  const parts = timestamp.split(":").map(Number);
+  if (parts.length === 2) {
+    return parts[0] * 60 + parts[1];
+  } else if (parts.length === 3) {
+    return parts[0] * 3600 + parts[1] * 60 + parts[2];
+  }
+
+  return 0;
+}
+
 // Create and configure the MCP server with tools
 function createMcpServer(): McpServer {
   const server = new McpServer({
@@ -332,6 +433,177 @@ function createMcpServer(): McpServer {
           content: [{ type: "text" as const, text: `Error: ${error.message}` }],
           isError: true,
         };
+      }
+    }
+  );
+
+  // Tool: get_comments - fetch video comments using YouTube API
+  server.tool(
+    "get_comments",
+    "Get top comments from a YouTube video. " +
+    "Returns comment author, text, like count, and reply count. " +
+    "Requires YOUTUBE_API_KEY environment variable. " +
+    "Useful for understanding audience reactions and discussion topics.",
+    {
+      url: z.string().describe("YouTube video URL or video ID"),
+      maxResults: z.number().default(25).describe("Maximum number of comments to fetch (default: 25, max: 100)"),
+      order: z.enum(["relevance", "time"]).default("relevance").describe("Sort order: 'relevance' (default) or 'time'"),
+    },
+    async ({ url, maxResults, order }) => {
+      const client = getYouTubeClient();
+      if (!client) {
+        return {
+          content: [{
+            type: "text" as const,
+            text: "Error: YOUTUBE_API_KEY environment variable is not set. Comments feature requires a YouTube API key."
+          }],
+          isError: true,
+        };
+      }
+
+      const videoId = extractVideoId(url);
+      if (!videoId) {
+        return {
+          content: [{ type: "text" as const, text: "Error: Could not extract video ID from URL" }],
+          isError: true,
+        };
+      }
+
+      console.log(`get_comments: Fetching comments for ${videoId}`);
+
+      try {
+        // First get video title for context
+        const videoResponse = await client.videos.list({
+          part: ["snippet"],
+          id: [videoId],
+        });
+
+        const videoTitle = videoResponse.data.items?.[0]?.snippet?.title || "Unknown Video";
+
+        // Fetch comments
+        const commentsResponse = await client.commentThreads.list({
+          part: ["snippet"],
+          videoId: videoId,
+          order: order,
+          maxResults: Math.min(maxResults, 100),
+          textFormat: "plainText",
+        });
+
+        const comments: CommentData[] = (commentsResponse.data.items || []).map((item) => {
+          const snippet = item.snippet?.topLevelComment?.snippet;
+          return {
+            author: snippet?.authorDisplayName || "Unknown",
+            text: snippet?.textDisplay || "",
+            likes: snippet?.likeCount || 0,
+            publishedAt: snippet?.publishedAt || "",
+            replyCount: item.snippet?.totalReplyCount || 0,
+          };
+        });
+
+        if (comments.length === 0) {
+          return {
+            content: [{
+              type: "text" as const,
+              text: `No comments found for: ${videoTitle}\n\nThis video may have comments disabled.`
+            }],
+          };
+        }
+
+        console.log(`get_comments: Found ${comments.length} comments`);
+        return {
+          content: [{ type: "text" as const, text: formatComments(comments, videoTitle) }],
+        };
+      } catch (err) {
+        const error = err as Error;
+        console.error("get_comments error:", error.message);
+
+        // Check for common API errors
+        if (error.message.includes("commentsDisabled")) {
+          return {
+            content: [{ type: "text" as const, text: "Error: Comments are disabled for this video" }],
+            isError: true,
+          };
+        }
+
+        return {
+          content: [{ type: "text" as const, text: `Error: ${error.message}` }],
+          isError: true,
+        };
+      }
+    }
+  );
+
+  // Tool: get_screenshot - capture a frame from a video at a specific timestamp
+  server.tool(
+    "get_screenshot",
+    "Capture a screenshot from a YouTube video at a specific timestamp. " +
+    "Returns the image as base64. Requires ffmpeg to be installed. " +
+    "Useful for getting visual context from specific moments in a video.",
+    {
+      url: z.string().describe("YouTube video URL"),
+      timestamp: z.string().default("0").describe("Timestamp to capture (e.g., '30', '1:30', or '1:30:00'). Default: 0 (beginning)"),
+    },
+    async ({ url, timestamp }) => {
+      console.log(`get_screenshot: Starting for ${url} at ${timestamp}`);
+
+      const tempDir = fs.mkdtempSync(`${os.tmpdir()}${path.sep}youtube-screenshot-`);
+      const timestampSeconds = parseTimestamp(timestamp);
+
+      try {
+        // Get video stream URL using yt-dlp
+        console.log("get_screenshot: Getting video stream URL...");
+        const streamUrl = await runYtDlp([
+          "--get-url",
+          "--format", "best[height<=720]", // Limit resolution for faster processing
+          "--no-warnings",
+          "--no-playlist",
+          url
+        ]);
+
+        const videoStreamUrl = streamUrl.trim().split("\n")[0]; // Get first URL (video)
+
+        if (!videoStreamUrl) {
+          return {
+            content: [{ type: "text" as const, text: "Error: Could not get video stream URL" }],
+            isError: true,
+          };
+        }
+
+        // Extract frame using ffmpeg
+        const outputPath = path.join(tempDir, "screenshot.jpg");
+        console.log(`get_screenshot: Extracting frame at ${timestampSeconds}s...`);
+
+        await runFfmpeg([
+          "-ss", timestampSeconds.toString(),
+          "-i", videoStreamUrl,
+          "-vframes", "1",
+          "-q:v", "2", // High quality JPEG
+          "-y", // Overwrite
+          outputPath
+        ]);
+
+        // Read the image and convert to base64
+        const imageBuffer = fs.readFileSync(outputPath);
+        const base64Image = imageBuffer.toString("base64");
+
+        console.log(`get_screenshot: Success! Image size: ${Math.round(imageBuffer.length / 1024)}KB`);
+
+        return {
+          content: [{
+            type: "image" as const,
+            data: base64Image,
+            mimeType: "image/jpeg",
+          }],
+        };
+      } catch (err) {
+        const error = err as Error;
+        console.error("get_screenshot error:", error.message);
+        return {
+          content: [{ type: "text" as const, text: `Error: ${error.message}` }],
+          isError: true,
+        };
+      } finally {
+        rimraf.sync(tempDir);
       }
     }
   );
@@ -675,6 +947,8 @@ async function runRemoteServer(port: number) {
     <div>
       <span class="scope">get_video</span>
       <span class="scope">get_playlist</span>
+      <span class="scope">get_comments</span>
+      <span class="scope">get_screenshot</span>
     </div>
     <p>Enter password to authorize:</p>
     <form method="POST" action="${url.pathname}">

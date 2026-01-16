@@ -6,12 +6,16 @@ A Model Context Protocol (MCP) server that fetches YouTube video metadata and tr
 
 - **get_video**: Fetches video metadata (title, channel, duration, views, upload date) and English transcript
 - **get_playlist**: Lists all videos in a YouTube playlist with titles, durations, and URLs
+- **get_comments**: Fetches top comments with author, text, likes, and reply counts (requires YouTube API key)
+- **get_screenshot**: Captures a frame from a video at any timestamp (requires ffmpeg)
 - **OAuth 2.1 Authentication**: Secure access with PKCE, consent page, and token management
 
 ## Requirements
 
 - Node.js 18+
 - yt-dlp (must be kept up-to-date - YouTube breaks old versions frequently)
+- ffmpeg (for screenshot feature)
+- YouTube API key (for comments feature) - [Get one here](https://console.developers.google.com/)
 
 ### Updating yt-dlp
 
@@ -60,6 +64,9 @@ OAUTH_CLIENT_ID=youtube-mcp-client
 OAUTH_CLIENT_SECRET=your-secret-here  # Generate with: openssl rand -hex 32
 # Generate password hash with: node -e "require('bcrypt').hash('yourpassword', 12).then(console.log)"
 AUTH_PASSWORD_HASH=$2b$12$...your-bcrypt-hash-here...
+
+# YouTube Data API Key (required for get_comments tool)
+YOUTUBE_API_KEY=your-youtube-api-key-here
 ```
 
 The server exposes:
@@ -225,6 +232,44 @@ Lists videos in a YouTube playlist.
 **Parameters:**
 - `url` (required): YouTube playlist URL
 - `limit` (optional): Max videos to list (default: 50, max: 200)
+
+### get_comments
+
+Fetches top comments from a YouTube video using the YouTube Data API v3.
+
+**Parameters:**
+- `url` (required): YouTube video URL or video ID
+- `maxResults` (optional): Maximum comments to fetch (default: 25, max: 100)
+- `order` (optional): Sort order - "relevance" (default) or "time"
+
+**Returns:**
+```
+Comments for: Video Title Here
+Total shown: 25
+
+@Username1 (42 likes) [3 replies]
+  This is an example comment text...
+
+@Username2 (15 likes)
+  Another comment here...
+```
+
+**Note:** Requires `YOUTUBE_API_KEY` environment variable. Get an API key from [Google Cloud Console](https://console.developers.google.com/).
+
+### get_screenshot
+
+Captures a screenshot from a YouTube video at a specific timestamp.
+
+**Parameters:**
+- `url` (required): YouTube video URL
+- `timestamp` (optional): Time to capture (default: "0")
+  - Accepts seconds: "30", "90.5"
+  - Accepts MM:SS format: "1:30"
+  - Accepts HH:MM:SS format: "1:30:00"
+
+**Returns:** Base64-encoded JPEG image
+
+**Note:** Requires ffmpeg to be installed (`apt install ffmpeg` on Ubuntu).
 
 ## Troubleshooting
 
@@ -536,7 +581,7 @@ Analyzed for feature ideas:
 | [Mohammad1704/youtube-transcript-mcp](https://github.com/Mohammad1704/youtube-transcript-mcp) | Multi-language, caching, retry logic |
 | [ZubeidHendricks/youtube-mcp-server](https://github.com/ZubeidHendricks/youtube-mcp-server) | Transcript search, timestamped output, YouTube search |
 | [nattyraz/youtube-mcp](https://github.com/nattyraz/youtube-mcp) | Markdown templates, MCP resources, chapter support |
-| [mrgoonie/vidcap-mcp-server](https://github.com/mrgoonie/vidcap-mcp-server) | Screenshots, comments, AI summaries |
+| [mrgoonie/vidcap-mcp-server](https://github.com/mrgoonie/vidcap-mcp-server) | ✅ Screenshots, ✅ comments, AI summaries |
 | [anaisbetts/mcp-youtube](https://github.com/anaisbetts/mcp-youtube) | (Similar to this implementation) |
 
 Key advantages of this implementation over all others:
@@ -545,6 +590,8 @@ Key advantages of this implementation over all others:
 - Uses yt-dlp (more reliable than npm transcript libraries)
 - Full metadata + transcript in single call
 - Playlist support
+- **Screenshots** via ffmpeg (no external API dependency)
+- **Comments** via YouTube Data API v3
 
 ## License
 
